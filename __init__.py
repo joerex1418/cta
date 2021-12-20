@@ -1,17 +1,17 @@
 """
-CTA Transit Wrapper for Python
+NAME: CTA Transit Wrapper for Python
 
 AUTHOR: Joe Rechenmacher
 GITHUB: joerex1418
 """
 
-from .cta import StaticFeed
 from .cta import BusRoute
 from .cta import BusStop
 from .cta import Bus
 from .cta import TrainRoute
 from .cta import TrainStation
 from .cta import Train
+from .cta import StaticFeed
 from .cta import BusTracker
 from .cta import TrainTracker
 from .cta import CustomerAlerts
@@ -40,5 +40,6 @@ BusStation = BusStop
 
 TrainStop = TrainStation
 
+train_stops = train_stations
 # ==========================================================
 

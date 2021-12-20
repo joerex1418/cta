@@ -35,19 +35,10 @@ class BusRoute:
     def __repr__(self) -> str:
         return f"""<cta.Bus object | Route: {self.__route} ({self.__direction})>"""
 
-    def bus(self) -> pd.DataFrame:
-        """
-        Display Bus Route information
-        """
-        return f"""
-        Bus Number: {self.__route}
-        Direction:  {self.__direction}
-        """
-
-    def show_route(self):
+    def route(self):
         return self.__route
     
-    def show_direction(self):
+    def direction(self):
         return self.__direction
 
     def stops(self) -> pd.DataFrame:
@@ -97,6 +88,9 @@ class BusRoute:
 
         - `sort_by`: column that will be used to sort the dataframe entries
         """
+        if str(stpid) not in list(self.__stops.stop_id):
+            print(f"Stop # {stpid} is not on this route")
+            return None
         if dt.datetime.now().time() < dt.time(16,0,0):
             key = CTA_BUS_API_KEY
         else:
@@ -122,10 +116,13 @@ class BusRoute:
         for p in response.json()["bustime-response"]["prd"]:
             row_data = []
             for col in PREDICTION_COLS:
-                if col != "tmstmp":
+                if col == "prdctdn":
+                    prediction_val = f'{p.get(col,"-")} mins' if p.get(col,"-") != "DUE" else "Due"
+                    row_data.append(prediction_val)
+                elif col != "tmstmp":
                     row_data.append(p.get(col,"-"))
                 else:
-                    ### NEED TO FIX THIS IN UTILS
+                    ### MIGHT NEED TO FIX SOON
                     try:row_data.append(prettify_time(p.get(col,"-")))
                     except:row_data.append(p.get(col,"-"))
             data.append(row_data)
@@ -212,6 +209,11 @@ class BusRoute:
         else:
             self.__vehicles = df
 
+    # ALIASES ---------------------
+    locations = positions = vehicles
+    arrivals = predictions
+    # -----------------------------
+
 class BusStop:
     def __init__(self,stop_id):
         self.__stop_id = stop_id
@@ -241,6 +243,10 @@ class BusStop:
         
         df = pd.DataFrame(data=data,columns=PREDICTION_COLS.values())
         return df
+
+    # ALIASES ---------------------
+    arrivals = predictions
+    # -----------------------------
 
 class Bus:
     def __init__(self,vid):
@@ -349,9 +355,8 @@ class Bus:
             ptrn_sequences.append(pt)
         self.__pattern = ptrn_sequences
 
-
 # ====================================================================================================
-# CTA Train Objects 
+# CTA Train Objects
 # ====================================================================================================
 class TrainRoute:
     """
@@ -370,7 +375,7 @@ class TrainRoute:
             self.__cols_for_stations_df = ["stop_id","stop_name","map_id","station_name","station_descriptive_name","direction_id","purple","purple_exp","lat","lon"]
         else:
             self.__cols_for_stations_df = ["stop_id","stop_name","map_id","station_name","station_descriptive_name","direction_id",self.__filter_col,"lat","lon"]
-    
+
     def __repr__(self) -> str:
         return f"""<cta.Line object | {self.line_name}>"""
 
@@ -473,7 +478,7 @@ class TrainRoute:
             return df.drop(columns=["station_desc"])
         return df
 
-    def positions(self):
+    def locations(self):
         """
         Gets the current position of every vehicle for this Line
         """
@@ -549,7 +554,8 @@ class TrainRoute:
         "key":key,
         "runnumber":rn,
         "outputType":"JSON"}
-        url = f"{CTA_TRAIN_BASE}/ttfollow.aspx?"
+
+        url = CTA_TRAIN_BASE + "/ttfollow.aspx?"
         response = requests.get(url,params=params)
         ctatt = response.json()["ctatt"]
         timestamp = ctatt.get("tmst")
@@ -609,7 +615,7 @@ class TrainRoute:
 
     def __get_stop_coords(self,stpid):
         df = self.__stations
-        station_row = df[df["stop_id"]==stpid]
+        station_row = df[df["stop_id"]==stpid].iloc[0]
         return (str(station_row.lat.item()),str(station_row.lon.item()))
 
     def __get_stop_name(self,stpid):
@@ -617,18 +623,262 @@ class TrainRoute:
         station_row = df[df["stop_id"]==str(stpid)]
         return station_row.stop_name.item()
     
-    def stops(self,hide_desc_col=True,hide_other_lines=True):
-        return self.stations(hide_desc_col,hide_other_lines)
+    
+    # ALIASES ---------------------
+    positions = vehicles = trains = locations
+    stops = stations
+    # -----------------------------
 
 class TrainStation:
+    """
+    # TrainStation
+
+    Represents an instance of an "L" parent station specified by corresponding station ID or (map ID) or stop ID
+    """
     def __init__(self,station_id):
-        self.__station_id = station_id
-        self.__map_id = station_id
+        isParent = False
+        if str(station_id)[0] == "3":   # station_id is for specific side of station
+            df = get_train_stations()
+            df = df[df.map_id==int(station_id)]
+            self.__map_id = station_id
+            self.__station_id = station_id
+        elif str(station_id)[0] == "4":
+            isParent = True
+            df = get_train_stations()   # station_id is for a parent station
+            df = df[df.map_id==int(station_id)]
+            self.__map_id = station_id
+            self.__station_id = station_id
+        df = get_train_stations()
+
+        if isParent is True:
+            self.__station_df = df[df.map_id==int(self.__station_id)]
+        else:
+            self.__map_id = df[df.stop_id==int(self.__station_id)].map_id.item()
+            self.__station_df = df[df.map_id==int(self.__map_id)]
+        
+        df = self.__station_df
+        
+        routes = {}
+        line_list = []
+        for c in COLOR_LABEL_LIST:
+            if True in list(df[c]):
+                line_list.append(c)
+                routes[c] = {
+                    "line":LINE_NAMES[LINES[c]],
+                    "label":LINE_LABELS[LINES[c]],
+                    "code":LINES[c]}
+        
+        self.__station_name = df.iloc[0].station_name
+        self.__description = df.iloc[0].station_descriptive_name
+        self.__lat = df.iloc[0].lat
+        self.__lon = df.iloc[0].lon
+        self.__routes = routes
+        self.__line_list = line_list
+
+    def __repr__(self):
+        return f"<cta.TrainStation Station: {self.__station_name} | Station ID: {self.__map_id}>"
+
+    def station(self):
+        station_dict = {
+            "station_name":self.__station_name,
+            "description":self.__description,
+            "station_id":self.__station_id,
+            "lat":self.__lat,
+            "lon":self.__lon
+        }
+        return pd.Series(station_dict)
+    
+    def stops(self):
+        """
+        Get dataframe of the parent station's separate stops/platforms (going separate directions)
+        """
+        df = self.__station_df
+        return df[["stop_id","stop_name","station_name","direction_id","map_id","ada"]+self.__line_list]
+
+    def routes(self):
+        """
+        Show all possible routes that are serviced by the station
+        """
+        return self.__routes
+
+    def arrivals(self,rt=None,max=None,route=None,line=None,limit=None,top=None,hide_desc_col=True):
+        """
+        Returns dataframe of estimated arrival times & locations for the station
+        
+        Params:
+        -------
+        - 'rt': can be used to specify a single route that comes through the station
+            - 'route':ALIAS for 'rt'
+            - 'line': ALIAS for 'rt'
+        - 'max': limits the amount of results shown
+            - 'limit':ALIAS for 'max'
+            - 'top':ALIAS for 'max'
+
+        Method ALIAS: 'predictions'
+        """
+        if route is not None:
+            rt = route
+        if line is not None:
+            rt = line
+        if top is not None:
+            max = top
+        if limit is not None:
+            max = limit
+        params = {
+            "key":CTA_TRAIN_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_TRAIN_API_KEY,
+            "mapid":self.__map_id,
+            "outputType":"JSON"}
+        if rt is not None:
+            params["rt"] = rt
+        if max is not None:
+            params["max"] = max
+        
+
+
+        url = CTA_TRAIN_BASE + "/ttarrivals.aspx?"
+        response = requests.get(url,params=params)
+
+        ctatt = response.json()["ctatt"]
+        timestamp = ctatt.get("tmst")
+        timestamp_obj = dt.datetime.strptime(timestamp,ISO_FMT_ALT)
+        arrvs = ctatt["eta"]
+        data = []
+        for a in arrvs:
+            prdt = a.get("prdt")
+            prdt_obj = dt.datetime.strptime(prdt,ISO_FMT_ALT)
+            arrT = a.get("arrT")
+            arrT_obj = dt.datetime.strptime(arrT,ISO_FMT_ALT)
+            due_in = int((arrT_obj - prdt_obj).seconds / 60)
+            due_in = 'Due' if due_in == 1 else f'{due_in} mins'
+            time_since_update = timestamp_obj - prdt_obj
+            time_since_update = f'{time_since_update.seconds} seconds ago'
+
+            # Col-value definitions:
+            stop_id = a.get("stpId")
+            stop_name = self.__get_stop_name(stop_id)
+            map_id = a.get("staId")
+            station_name = a.get("staNm")
+            station_desc = a.get("stpDe")
+            run_num = a.get("rn")
+            rt = FILTER_COL[a.get("rt")]
+            dest_stop = a.get("destSt")
+            dest_name = a.get("destNm")
+            trDr = a.get("trDr")
+            data.append([
+                stop_id,
+                stop_name,
+                map_id,
+                station_name,
+                station_desc,
+                run_num,
+                rt,
+                dest_stop,
+                dest_name,
+                trDr,
+                prettify_time(prdt),
+                prettify_time(arrT),
+                due_in,
+                time_since_update,
+                a.get("isApp"),
+                a.get("isSch"),
+                a.get("isDly"),
+                a.get("isFlt"),
+                a.get("flags"),
+                a.get("lat"),
+                a.get("lon"),
+                a.get("heading")])
+        df = pd.DataFrame(data=data,columns=L_ARRIVALS_COLS)
+        if hide_desc_col is True:
+            return df.drop(columns=["station_desc"])
+        return df
+
+    def __get_stop_name(self,stpid):
+        df = self.__station_df
+        station_row = df[df["stop_id"]==str(stpid)]
+        return station_row.stop_name.item()
+    
+    # Aliases ---------------------------------
+    predictions = arrivals
+    # -----------------------------------------
 
 class Train:
-    def __init__(self):
-        pass
+    def __init__(self,rn):
+        self.__rn = rn
+        self.__stations = get_train_stations()
+        self.__follow()
+    
+    def __repr__(self):
+        return f"<cta.Train {self.__line_rt} | {self.__service_name} | {self.__rn}>"
+    
+    def follow(self,hide_desc_col=True):
+        return self.__follow(hide_desc_col)
 
+    def __follow(self,hide_desc_col=True):
+        params = {
+            "key":CTA_TRAIN_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_TRAIN_API_KEY,
+            "runnumber":self.__rn,
+            "outputType":"JSON"}
+
+        url = CTA_TRAIN_BASE + "/ttfollow.aspx?"
+        response = requests.get(url,params=params)
+        ctatt = response.json()["ctatt"]
+        timestamp = ctatt.get("tmst")
+        timestamp_obj = dt.datetime.strptime(timestamp,ISO_FMT_ALT)
+        position = ctatt["position"]
+        lat = position["lat"]
+        lon = position["lon"]
+        heading = position["heading"]
+        data = []
+        self.__service_name = ctatt["eta"][0].get("destNm")
+        self.__line_rt = ctatt["eta"][0].get("rt")
+        for e in ctatt["eta"]:
+            stpId = e.get("stpId")
+            coords = self.__get_stop_coords(stpId)
+            stpLat = coords[0]
+            stpLon = coords[1]
+            prdt = e.get("prdt")
+            prdt_obj = dt.datetime.strptime(prdt,ISO_FMT_ALT)
+            arrT = e.get("arrT")
+            arrT_obj = dt.datetime.strptime(arrT,ISO_FMT_ALT)
+            due_in = int((arrT_obj - prdt_obj).seconds / 60)
+            due_in = 'Due' if due_in == 1 else f'{due_in} mins'
+            time_since_update = timestamp_obj - prdt_obj
+            time_since_update = f'{time_since_update.seconds} seconds ago'
+
+
+            data.append([
+                stpId,
+                stpLat,
+                stpLon,
+                e.get("staId"),
+                e.get("staNm"),
+                e.get("stpDe"),
+                e.get("destNm"),
+                e.get("rn"),
+                e.get("rt"),
+                e.get("destSt"),
+                e.get("trDr"),
+                prettify_time(prdt),
+                prettify_time(arrT),
+                due_in,
+                time_since_update,
+                e.get("isApp"),
+                e.get("isSch"),
+                e.get("isDly"),
+                e.get("isFlt"),
+                e.get("flags"),
+                lat,
+                lon,
+                heading])
+        df = pd.DataFrame(data=data,columns=L_FOLLOW_COLS)
+        if hide_desc_col is True:
+            return df.drop(columns=["service_desc"])
+        return df
+    
+    def __get_stop_coords(self,stpid):
+        df = self.__stations
+        station_row = df[df["stop_id"]==stpid].iloc[0]
+        return (str(station_row.lat.item()),str(station_row.lon.item()))
 
 # ====================================================================================================
 # API Wrappers
@@ -739,7 +989,7 @@ class BusTracker:
     """
     # BusTracker API
 
-    Interface with CTA's BusTrackerAPI to display busses, routes, and other information from the transit system in an easy-to-read format
+    Interface with CTA's BusTrackerAPI to display busses, routes, and other information from the transit system
     """
     def __init__(self):
         self.__stop_reference = get_stops()
@@ -946,10 +1196,263 @@ class TrainTracker:
     """
     # TrainTracker API
 
-    (NOT YET CONFIGURED)
+    Interface with CTA's TrainTrackerAPI to display trains, routes, and other information from the transit system
     """
     def __init__(self):
-        pass
+        self.__stations = get_train_stations().dropna(subset=["map_id"])
+    
+    def stations(self):
+        return self.__stations
+    
+    def arrivals(self,*args,mapid=None,stpid=None,max=None,rt=None,limit=None,top=None,route=None,hide_desc_col=True):
+        params = {
+            "key":CTA_TRAIN_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_TRAIN_API_KEY,
+            "outputType":"JSON"}
+        if limit is not None:
+            max = limit
+        if top is not None:
+            max = top
+        if route is not None:
+            rt = route
+
+        if mapid is not None:
+            params["mapid"] = mapid
+        elif stpid is not None:
+            params["stpid"] = stpid
+        elif str(args[0])[0] == "3":
+            params["stpid"] = args[0]
+        elif str(args[0])[0] == "4":
+            params["mapid"] = args[0]
+        
+        if len(args) == 2:
+            try:
+                params["rt"] = LINES[args[1].lower()]
+            except:
+                params["rt"] = LINES[rt.lower()]
+        else:
+            if rt is not None:
+                params["rt"] = LINES[rt.lower()]
+        if max is not None:
+            params["max"] = max
+        url = CTA_TRAIN_BASE + "/ttarrivals.aspx?"
+
+        response = requests.get(url,params=params)
+
+        ctatt = response.json()["ctatt"]
+        timestamp = ctatt.get("tmst")
+        timestamp_obj = dt.datetime.strptime(timestamp,ISO_FMT_ALT)
+        arrvs = ctatt["eta"]
+        data = []
+        for a in arrvs:
+            prdt = a.get("prdt")
+            prdt_obj = dt.datetime.strptime(prdt,ISO_FMT_ALT)
+            arrT = a.get("arrT")
+            arrT_obj = dt.datetime.strptime(arrT,ISO_FMT_ALT)
+            due_in = int((arrT_obj - prdt_obj).seconds / 60)
+            due_in = 'Due' if due_in == 1 else f'{due_in} mins'
+            time_since_update = timestamp_obj - prdt_obj
+            time_since_update = f'{time_since_update.seconds} seconds ago'
+
+            # Col-value definitions:
+            stop_id = a.get("stpId")
+            stop_name = self.__get_stop_name(stop_id)
+            map_id = a.get("staId")
+            station_name = a.get("staNm")
+            station_desc = a.get("stpDe")
+            run_num = a.get("rn")
+            rt = FILTER_COL[a.get("rt")]
+            dest_stop = a.get("destSt")
+            dest_name = a.get("destNm")
+            trDr = a.get("trDr")
+            data.append([
+                stop_id,
+                stop_name,
+                map_id,
+                station_name,
+                station_desc,
+                run_num,
+                rt,
+                dest_stop,
+                dest_name,
+                trDr,
+                prettify_time(prdt),
+                prettify_time(arrT),
+                due_in,
+                time_since_update,
+                a.get("isApp"),
+                a.get("isSch"),
+                a.get("isDly"),
+                a.get("isFlt"),
+                a.get("flags"),
+                a.get("lat"),
+                a.get("lon"),
+                a.get("heading")])
+        df = pd.DataFrame(data=data,columns=L_ARRIVALS_COLS)
+        if hide_desc_col is True:
+            return df.drop(columns=["station_desc"])
+        return df
+
+    def follow(self,runnumber=None,rn=None,hide_desc_col=True):
+        """
+        Returns a dataframe of a line's arrival/location data for a specific run_number (rn)
+        
+        Params:
+        -------
+        - 'runnumber': the run number (train/vehicle ID) to track (REQUIRED)
+        - 'rn': shorthand alias for 'runnumber'
+
+        """
+        params = {
+        "key":CTA_TRAIN_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_TRAIN_API_KEY,
+        "outputType":"JSON"}
+        if rn is not None:
+            runnumber = rn
+        if runnumber is not None:
+            params["runnumber"] = runnumber
+        else:
+            print("Error: 'runnumber' parameter is required")
+            return None
+
+        url = CTA_TRAIN_BASE + "/ttfollow.aspx?"
+        response = requests.get(url,params=params)
+        ctatt = response.json()["ctatt"]
+        timestamp = ctatt.get("tmst")
+        timestamp_obj = dt.datetime.strptime(timestamp,ISO_FMT_ALT)
+        if ctatt["errCd"] == "501":
+            return ctatt["errNm"]
+        position = ctatt["position"]
+        lat = position["lat"]
+        lon = position["lon"]
+        heading = position["heading"]
+        data = []
+        for e in ctatt["eta"]:
+            stpId = e.get("stpId")
+            coords = self.__get_stop_coords(stpId)
+            stpLat = coords[0]
+            stpLon = coords[1]
+            prdt = e.get("prdt")
+            prdt_obj = dt.datetime.strptime(prdt,ISO_FMT_ALT)
+            arrT = e.get("arrT")
+            arrT_obj = dt.datetime.strptime(arrT,ISO_FMT_ALT)
+            due_in = int((arrT_obj - prdt_obj).seconds / 60)
+            due_in = 'Due' if due_in == 1 else f'{due_in} mins'
+            time_since_update = timestamp_obj - prdt_obj
+            time_since_update = f'{time_since_update.seconds} seconds ago'
+            data.append([
+                stpId,
+                stpLat,
+                stpLon,
+                e.get("staId"),
+                e.get("staNm"),
+                e.get("stpDe"),
+                e.get("destNm"),
+                e.get("rn"),
+                e.get("rt"),
+                e.get("destSt"),
+                e.get("trDr"),
+                prettify_time(prdt),
+                prettify_time(arrT),
+                due_in,
+                time_since_update,
+                e.get("isApp"),
+                e.get("isSch"),
+                e.get("isDly"),
+                e.get("isFlt"),
+                e.get("flags"),
+                lat,
+                lon,
+                heading])
+        df = pd.DataFrame(data=data,columns=L_FOLLOW_COLS)
+        if hide_desc_col is True:
+            return df.drop(columns=["service_desc"])
+        return df
+
+    def locations(self,route):
+        """
+        Gets the current position of every train for a given route (line)
+
+        Params:
+        -------
+        - 'route': route code/line to track locations (can be a comma-separated list of multiple route identifiers)
+        """
+        params = {
+        "key":CTA_TRAIN_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_TRAIN_API_KEY,
+        "outputType":"JSON"}
+        if route is not None:
+            routes = route.split(",")
+            new_routes = []
+            for rt in routes:
+                new_routes.append(LINES[rt.replace(" ","").lower()])
+            params["rt"] = ",".join(new_routes)
+        else:
+            print("Error: 'route' parameter is required")
+            return None
+        url = f"{CTA_TRAIN_BASE}/ttpositions.aspx?"
+        response = requests.get(url,params=params)
+        ctatt = response.json()["ctatt"]
+        timestamp = ctatt.get("tmst")
+        timestamp_obj = dt.datetime.strptime(timestamp,ISO_FMT_ALT)
+        data = []
+        try:
+            for r in ctatt["route"]:
+                line = FILTER_COL[r.get("@name")]
+                train_arrivals = r.get("train")
+                for t in train_arrivals:
+                    prdt = t.get("prdt")
+                    prdt_obj = dt.datetime.strptime(prdt,ISO_FMT_ALT)
+                    arrT = t.get("arrT")
+                    arrT_obj = dt.datetime.strptime(arrT,ISO_FMT_ALT)
+                    due_in = int((arrT_obj - prdt_obj).seconds / 60)
+                    due_in = 'Due' if due_in == 1 else f'{due_in} mins'
+                    time_since_update = timestamp_obj - prdt_obj
+                    time_since_update = f'{time_since_update.seconds} seconds ago'
+                    
+                    run_num = t.get("rn")
+                    dest_stop_id = t.get("destSt")
+                    service_name = t.get("destNm")
+                    next_map_id = t.get("nextStaId")
+                    next_station_name = t.get("nextStaNm")
+                    next_stop_id = t.get("nextStpId")
+                    trDr = t.get("trDr")
+                    data.append([
+                        line,
+                        run_num,
+                        dest_stop_id,
+                        service_name,
+                        next_map_id,
+                        next_station_name,
+                        next_stop_id,
+                        trDr,
+                        prettify_time(prdt),
+                        prettify_time(arrT),
+                        due_in,
+                        time_since_update,
+                        t.get("isApp"),
+                        t.get("isDly"),
+                        t.get("flags"),
+                        t.get("lat"),
+                        t.get("lon"),
+                        t.get("heading")])
+            df = pd.DataFrame(data=data,columns=L_POSITIONS_COLS)
+            return df
+        except:
+            return pd.DataFrame()
+
+    def __get_stop_name(self,stpid):
+        df = self.__stations
+        station_row = df[df["stop_id"]==str(stpid)]
+        return station_row.stop_name.item()
+
+    def __get_stop_coords(self,stpid):
+        df = self.__stations
+        station_row = df[df["stop_id"]==stpid].iloc[0]
+        return (str(station_row.lat.item()),str(station_row.lon.item()))
+
+    # ALIASES ---------------------
+    stops = stations
+    predictions = arrivals
+    positions = vehicles = trains = locations
+    # -----------------------------
 
 class CustomerAlerts:
     """
@@ -958,8 +1461,9 @@ class CustomerAlerts:
     (NOT YET CONFIGURED)
     """
     def __init__(self):
-        url = CTA_ALERTS_BASE + "/routes.aspx?outputType=json"
-        url = CTA_ALERTS_BASE + "/alerts.aspx?outputType=json"
+        # http://lapi.transitchicago.com/api/1.0/routes.aspx?outputType=json
+        self.__route_alerts = CTA_ALERTS_BASE + "/routes.aspx?outputType=json"
+        self.__alerts = CTA_ALERTS_BASE + "/alerts.aspx?outputType=json"
 
 # ====================================================================================================
 # Other
