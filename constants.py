@@ -7,8 +7,6 @@ CTA_TRAIN_API_KEY = ""
 ALT_TRAIN_API_KEY = ""
 
 CTA_ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" # I don't think an API key is needed for this...which is nice :)
-route_alerts_ep = "/routes.aspx?outputType=json"
-route_alert_details_ep = "/alerts.aspx?outputType=json"
 
 DATA_BASE = "https://data.cityofchicago.org/resource/6iiy-9s97.json?"
 
