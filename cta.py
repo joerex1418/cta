@@ -1,4 +1,3 @@
-from typing import Iterable
 import requests
 import pandas as pd
 from pprint import pformat
@@ -11,108 +10,9 @@ from .utils import ISO_FMT_ALT
 
 from .utils_cta import *
 
-class StaticFeed:
-    """
-    # CTA GTFS Static Feed
-
-    Interface with the CTA static feed to display information from the local machine's GTFS txt files
-
-    - Run 'cta.update_static_feed()' to download .txt files to local storage
-
-    """
-    def __init__(self) -> None:
-        pass
-
-    def stops(self,hide_desc_col=True) -> pd.DataFrame:
-        """
-        Returns dataframe of GTFS `stops.txt` file
-
-        NOTE: Not 'real-time' data; intended for reference purposes
-        """
-        df = get_stops()
-        # replacing NaN values with "-"
-        df.fillna("-",inplace=True)
-        # rearranging column order for better readability
-        columns = ['stop_id','stop_code','map_id','stop_name','stop_desc','stop_lat','stop_lon','location_type','wheelchair_boarding']
-        df = df[columns]
-        route_dirs = []
-        for desc in df.stop_desc:
-            if "northbound" in desc.lower():
-                route_dirs.append("N")
-            elif "southbound" in desc.lower():
-                route_dirs.append("S")
-            elif "westbound" in desc.lower():
-                route_dirs.append("W")
-            elif "eastbound" in desc.lower():
-                route_dirs.append("E")
-            else:
-                route_dirs.append("-")
-
-        df.insert(4,"rtdir",route_dirs)
-        if hide_desc_col == True:
-            return df.drop(columns=["stop_desc"])
-        else:
-            return df
-
-    def routes(self,update_data=False) -> pd.DataFrame:
-        """Retrieves locally saved bus route data from CTA Bus Tracker API
-
-        Params
-        ------
-        - `update_data`: (Default FALSE) Set to TRUE to have the data updated before returning it
-
-        Columns in returned dataframe
-        --------
-        `rt`: bus route id\n
-        `rtnm`:bus route name\n
-        `rtclr`:bus route color code (HEX CODE)\n
-        `rtdd`:bus route 'dd' code? (not completely sure tbh)
-
-        Note:
-        -----
-        Use cta.update_bus_routes() to ensure the most up-to-date data is being used
-        """
-        if update_data is True:
-            update_bus_routes()
-        df = get_bus_routes()
-        return df
-
-    def trips(self) -> pd.DataFrame:
-        """
-        Returns dataframe of GTFS `trips.txt` file
-
-        NOTE: Not 'real-time' data; intended for reference purposes
-        """
-        df = get_trips()
-        return df
-
-    def calendar(self) -> pd.DataFrame:
-        """
-        Returns dataframe of GTFS `calendar.txt` file
-
-        NOTE: Not 'real-time' data; intended for reference purposes
-        """
-        df = get_calendar()
-        return df
-
-    def transfers(self) -> pd.DataFrame:
-        """
-        Returns dataframe of GTFS `transfers.txt` file
-        
-        NOTE: Not 'real-time' data; intended for reference purposes
-        """
-        df = get_transfers()
-        return df
-
-    def stop_times(self) -> pd.DataFrame:
-        """
-        Returns dataframe of GTFS `stop_times.txt` file
-        
-        NOTE: Not 'real-time' data; intended for reference purposes
-        """
-        df = get_stop_times()
-        return df
-
+# ====================================================================================================
+# CTA Bus Objects 
+# ====================================================================================================
 class BusRoute:
     """
     # Bus Route
@@ -204,8 +104,7 @@ class BusRoute:
         params = {
             "key":key,
             "rt":self.__route,
-            "format":"json"
-        }
+            "format":"json"}
         if stpid is not None:
             params["stpid"] = stpid
         elif vid is not None:
@@ -314,9 +213,146 @@ class BusRoute:
             self.__vehicles = df
 
 class BusStop:
-    def __init__(self,stop_id) -> None:
+    def __init__(self,stop_id):
         self.__stop_id = stop_id
 
+    def predictions(self):
+        if dt.datetime.now().time() < dt.time(16,0,0):
+            key = CTA_BUS_API_KEY
+        else:
+            key = ALT_BUS_API_KEY
+        params = {
+            "key":key,
+            "stpid":self.__stop_id,
+            "format":"json"}
+        url = CTA_BUS_BASE + "/getpredictions?"
+        response = requests.get(url,params=params)
+        data = []
+        for p in response.json()["bustime-response"]["prd"]:
+            row_data = []
+            for col in PREDICTION_COLS:
+                if col != "tmstmp":
+                    row_data.append(p.get(col,"-"))
+                else:
+                    ### NEED TO FIX THIS IN UTILS
+                    try:row_data.append(prettify_time(p.get(col,"-")))
+                    except:row_data.append(p.get(col,"-"))
+            data.append(row_data)
+        
+        df = pd.DataFrame(data=data,columns=PREDICTION_COLS.values())
+        return df
+
+class Bus:
+    def __init__(self,vid):
+        self.__vid = vid
+        self.__get_vehicles()
+        self.__get_predictions()
+
+    def vehicle(self,update_on_call=True):
+        if update_on_call is True:
+            self.__get_vehicles()
+        return self.__vehicle
+
+    def predictions(self,update_on_call=True):
+        if update_on_call is True:
+            self.__get_predictions()
+        df = self.__predictions
+        return df
+    
+    def patterns(self):
+        lst = self.__pattern
+        return lst
+
+    def __get_vehicles(self):
+        if dt.datetime.now().time() < dt.time(16,0,0):
+            key = CTA_BUS_API_KEY
+        else:
+            key = ALT_BUS_API_KEY
+        
+        params = {
+            "key":key,
+            "vid":self.__vid,
+            "format":"json"}
+        
+        url = CTA_BUS_BASE + "/getvehicles?"
+        response = requests.get(url,params=params)
+        print(response.url)
+        data = []
+        for v in response.json()["bustime-response"]["vehicle"]:
+            self.__pid = v.get("pid")
+            row_data = [
+                v.get("vid","-"),
+                v.get("tmstmp","-"),
+                v.get("lat","-"),
+                v.get("lon","-"),
+                v.get("hdg","-"),
+                v.get("pid","-"),
+                v.get("rt","-"),
+                v.get("des","-"),
+                v.get("pdist","-"),
+                v.get("dly",None),
+                v.get("tatripid","-"),
+                v.get("tablockid","-"),
+                v.get("zone","")]
+            
+            data.append(row_data)
+        df = pd.DataFrame(data=data,columns=VEHICLE_COLS.values())
+        # df = df[df["pattern_id"].isin(self.__pids)]
+        
+        self.__vehicle = df
+
+    def __get_predictions(self):
+        if dt.datetime.now().time() < dt.time(16,0,0):
+            key = CTA_BUS_API_KEY
+        else:
+            key = ALT_BUS_API_KEY
+        params = {
+            "key":key,
+            "vid":self.__vid,
+            "format":"json"}
+
+        url = CTA_BUS_BASE + f"/getpredictions?"
+
+        response = requests.get(url,params=params)
+        data = []
+        for p in response.json()["bustime-response"]["prd"]:
+            row_data = []
+            for col in PREDICTION_COLS:
+                if col != "tmstmp":
+                    row_data.append(p.get(col,"-"))
+                else:
+                    ### NEED TO FIX THIS IN UTILS
+                    try:row_data.append(prettify_time(p.get(col,"-")))
+                    except:row_data.append(p.get(col,"-"))
+            data.append(row_data)
+        
+        df = pd.DataFrame(data=data,columns=PREDICTION_COLS.values())
+        df.sort_values(by=["predicted_time","stop"],ascending=[True,True],inplace=True)
+        self.__predictions = df
+
+    def __get_pattern(self):
+        if dt.datetime.now().time() < dt.time(16,0,0):
+            key = CTA_BUS_API_KEY
+        else:
+            key = ALT_BUS_API_KEY
+        params = {
+            "key":key,
+            "pid":self.__pid,
+            "format":"json"}
+
+        url = CTA_BUS_BASE + "/getpatterns?"
+        response = requests.get(url,params=params)
+        ptrn_sequences = []
+        pattern_idx = response.json()["bustime-response"]["ptr"][0]
+        self.__direction = pattern_idx["rtdir"]
+        for pt in pattern_idx["pt"]:
+            ptrn_sequences.append(pt)
+        self.__pattern = ptrn_sequences
+
+
+# ====================================================================================================
+# CTA Train Objects 
+# ====================================================================================================
 class TrainRoute:
     """
     Represents an instance of an "L" line (specified by the 'line' attribute)
@@ -404,8 +440,8 @@ class TrainRoute:
             map_id = a.get("staId")
             station_name = a.get("staNm")
             station_desc = a.get("stpDe")
-            run_num = a.get("rn"),
-            rt = a.get("rt"),
+            run_num = a.get("rn")
+            rt = a.get("rt")
             dest_stop = a.get("destSt")
             dest_name = a.get("destNm")
             trDr = a.get("trDr")
@@ -589,18 +625,119 @@ class TrainStation:
         self.__station_id = station_id
         self.__map_id = station_id
 
-class RouteSketch:
-    """
-    Create a mapped route made up of a series of coordinates
-    """
-    def __init__(self,sketch_type,data):
+class Train:
+    def __init__(self):
         pass
 
-# API Wrappers ====================================================================================
 
-class BusTrackerAPI:
+# ====================================================================================================
+# API Wrappers
+# ====================================================================================================
+class StaticFeed:
     """
-    # BusTracker
+    # CTA GTFS Static Feed
+
+    Interface with the CTA static feed to display information from the local machine's GTFS txt files
+
+    - Run 'cta.update_static_feed()' to download .txt files to local storage
+
+    """
+    def __init__(self) -> None:
+        pass
+
+    def stops(self,hide_desc_col=True) -> pd.DataFrame:
+        """
+        Returns dataframe of GTFS `stops.txt` file
+
+        NOTE: Not 'real-time' data; intended for reference purposes
+        """
+        df = get_stops()
+        # replacing NaN values with "-"
+        df.fillna("-",inplace=True)
+        # rearranging column order for better readability
+        columns = ['stop_id','stop_code','map_id','stop_name','stop_desc','stop_lat','stop_lon','location_type','wheelchair_boarding']
+        df = df[columns]
+        route_dirs = []
+        for desc in df.stop_desc:
+            if "northbound" in desc.lower():
+                route_dirs.append("N")
+            elif "southbound" in desc.lower():
+                route_dirs.append("S")
+            elif "westbound" in desc.lower():
+                route_dirs.append("W")
+            elif "eastbound" in desc.lower():
+                route_dirs.append("E")
+            else:
+                route_dirs.append("-")
+
+        df.insert(4,"rtdir",route_dirs)
+        if hide_desc_col == True:
+            return df.drop(columns=["stop_desc"])
+        else:
+            return df
+
+    def routes(self,update_data=False) -> pd.DataFrame:
+        """Retrieves locally saved bus route data from CTA Bus Tracker API
+
+        Params
+        ------
+        - `update_data`: (Default FALSE) Set to TRUE to have the data updated before returning it
+
+        Columns in returned dataframe
+        --------
+        `rt`: bus route id\n
+        `rtnm`:bus route name\n
+        `rtclr`:bus route color code (HEX CODE)\n
+        `rtdd`:bus route 'dd' code? (not completely sure tbh)
+
+        Note:
+        -----
+        Use cta.update_bus_routes() to ensure the most up-to-date data is being used
+        """
+        if update_data is True:
+            update_bus_routes()
+        df = get_bus_routes()
+        return df
+
+    def trips(self) -> pd.DataFrame:
+        """
+        Returns dataframe of GTFS `trips.txt` file
+
+        NOTE: Not 'real-time' data; intended for reference purposes
+        """
+        df = get_trips()
+        return df
+
+    def calendar(self) -> pd.DataFrame:
+        """
+        Returns dataframe of GTFS `calendar.txt` file
+
+        NOTE: Not 'real-time' data; intended for reference purposes
+        """
+        df = get_calendar()
+        return df
+
+    def transfers(self) -> pd.DataFrame:
+        """
+        Returns dataframe of GTFS `transfers.txt` file
+        
+        NOTE: Not 'real-time' data; intended for reference purposes
+        """
+        df = get_transfers()
+        return df
+
+    def stop_times(self) -> pd.DataFrame:
+        """
+        Returns dataframe of GTFS `stop_times.txt` file
+        
+        NOTE: Not 'real-time' data; intended for reference purposes
+        """
+        df = get_stop_times()
+        return df
+
+class BusTracker:
+    """
+    # BusTracker API
 
     Interface with CTA's BusTrackerAPI to display busses, routes, and other information from the transit system in an easy-to-read format
     """
@@ -805,18 +942,18 @@ class BusTrackerAPI:
 
         return patterns
 
-class TrainTrackerAPI:
+class TrainTracker:
     """
-    Wrapper for the CTA's "Train Tracker API"
+    # TrainTracker API
 
     (NOT YET CONFIGURED)
     """
     def __init__(self):
         pass
 
-class CustomerAlertsAPI:
+class CustomerAlerts:
     """
-    Wrapper for the CTA's "Customer Alerts API"
+    # CustomerAlerts API
 
     (NOT YET CONFIGURED)
     """
@@ -824,9 +961,12 @@ class CustomerAlertsAPI:
         url = CTA_ALERTS_BASE + "/routes.aspx?outputType=json"
         url = CTA_ALERTS_BASE + "/alerts.aspx?outputType=json"
 
+# ====================================================================================================
+# Other
+# ====================================================================================================
 class TransitData:
     """
-    Interact with CTA Ridership Data API (powered by Socrata)
+    # CTA Ridership (Socrata API)
     """
     def __init__(self):
         self.__today_obj = dt.datetime.today()
@@ -868,35 +1008,18 @@ class TransitData:
         data = response.json()
         return pd.DataFrame(data)
 
-# =================================================================================================
+class RouteSketch:
+    """
+    Create a mapped route made up of a series of coordinates
+    """
+    def __init__(self,sketch_type,data):
+        pass
 
-def stop_search(query,hide_desc_col=True) -> pd.Series | pd.DataFrame:
-    """
-    Search for a CTA stop/station by name.
-    """
-    df = get_stops()
-    q = query.lower().replace("and","&")
-    if "&" in q:
-        q_list = str(q).split("&")
-        street1 = q_list[0].strip()
-        street2 = q_list[1].strip()
-        results = []
-        for idx,s in enumerate(df.stop_name):
-            if street1 in str(s).lower() and street2 in str(s).lower():
-                results.append(df.iloc[idx])
-        if hide_desc_col is True:
-            return pd.DataFrame(results).drop(columns=["stop_desc"])
-        else:
-            return pd.DataFrame(results)
-    
-    results = []
-    for idx,s in enumerate(df.stop_name):
-        if q in str(s).lower():
-            results.append(df.iloc[idx])
-    if hide_desc_col is True:
-        return pd.DataFrame(results).drop(columns=["stop_desc"])
-    else:
-        return pd.DataFrame(results)
+# ====================================================================================================
+# Functions
+# ====================================================================================================
+def cta_stops():
+    return get_stops()
 
 def route_transfers() -> pd.DataFrame:
     """
@@ -1286,3 +1409,9 @@ def train_follow(self,rn,hide_desc_col=True) -> pd.DataFrame:
     if hide_desc_col is True:
         return df.drop(columns=["service_desc"])
     return df
+
+
+
+
+
+

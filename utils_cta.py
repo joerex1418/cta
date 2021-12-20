@@ -16,6 +16,33 @@ from .constants import STOP_COLS
 # 30000-39999   = Train stops
 # 40000-49999   = Train stations (parent stops)
 
+def stop_search(query,hide_desc_col=False) -> pd.Series | pd.DataFrame:
+    """
+    Search for a CTA stop/station by name.
+    """
+    df = get_stops()
+    q = query.lower().replace("and","&")
+    if "&" in q:
+        q_list = str(q).split("&")
+        street1 = q_list[0].strip()
+        street2 = q_list[1].strip()
+        results = []
+        for idx,s in enumerate(df.stop_name):
+            if street1 in str(s).lower() and street2 in str(s).lower():
+                results.append(df.iloc[idx])
+    else:
+        results = []
+        for idx,s in enumerate(df.stop_name):
+            if q in str(s).lower():
+                results.append(df.iloc[idx])
+
+    df = pd.DataFrame(results)
+    df["stop_desc"].str.slice(df["stop_desc"].str.find(", ")+2)
+    if hide_desc_col is True:
+        return df.drop(columns=["stop_desc"])
+    else:
+        return df
+
 def split_datetime(dt_str):
     r = dt_str
     date = r[:8]
