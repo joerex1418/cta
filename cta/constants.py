@@ -6,7 +6,7 @@ CTA_TRAIN_BASE = "http://lapi.transitchicago.com/api/1.0"
 CTA_TRAIN_API_KEY = ""
 ALT_TRAIN_API_KEY = ""
 
-CTA_ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" # I don't think an API key is needed for this...which is nice :)
+CTA_ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" # API key not needed for this :)
 
 
 DATA_BASE = "https://data.cityofchicago.org/resource/6iiy-9s97.json?"
