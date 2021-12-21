@@ -1,12 +1,13 @@
 CTA_BUS_BASE = "http://www.ctabustracker.com/bustime/api/v2"
-CTA_BUS_API_KEY = ""
-ALT_BUS_API_KEY = ""
+CTA_BUS_API_KEY = "tRdG7PFxURAeggSdNVRrX2KMh"
+ALT_BUS_API_KEY = "mBgpGDuwnvHnkyun6S3k9zX8j"
 
 CTA_TRAIN_BASE = "http://lapi.transitchicago.com/api/1.0"
-CTA_TRAIN_API_KEY = ""
-ALT_TRAIN_API_KEY = ""
+CTA_TRAIN_API_KEY = "3fcd1fa1dd4c4d7aa38454cc83b11ea0"
+ALT_TRAIN_API_KEY = "f2d8efbe05d5480a98d1f6a7655bb91c"
 
 CTA_ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" # I don't think an API key is needed for this...which is nice :)
+
 
 DATA_BASE = "https://data.cityofchicago.org/resource/6iiy-9s97.json?"
 

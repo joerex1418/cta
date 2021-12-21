@@ -1,6 +1,12 @@
+import lxml
+import html5lib
 import requests
 import pandas as pd
 from pprint import pformat
+from unicodedata import normalize
+from bs4 import BeautifulSoup as bs
+
+from requests.models import Response
 
 from .constants import *
 
@@ -1458,12 +1464,293 @@ class CustomerAlerts:
     """
     # CustomerAlerts API
 
-    (NOT YET CONFIGURED)
+    Interface with the CTA's CustomerAlertsAPI to display information about active/upcoming alerts for specific routes, trips, and stations 
     """
     def __init__(self):
         # http://lapi.transitchicago.com/api/1.0/routes.aspx?outputType=json
-        self.__route_alerts = CTA_ALERTS_BASE + "/routes.aspx?outputType=json"
-        self.__alerts = CTA_ALERTS_BASE + "/alerts.aspx?outputType=json"
+        self.__status = CTA_ALERTS_BASE + "/routes.aspx?"
+        self.__details = CTA_ALERTS_BASE + "/alerts.aspx?"
+    
+    def status(self,service=None,routeid=None,stationid=None,**kwargs):
+        """
+        Get the overall status information of all (or specified) service types, routes, or stations
+
+        Params:
+        -------
+        - 'service': single or comma-delimited list of service types (Default value -> "bus,rail,systemwide")
+            - Valid values include -> "bus", "rail" ("train"), "station" ("stop"), "systemwide"
+        - 'routeid': get status for a specific route/'L'-line
+            - 'route' | 'rt' | 'line'
+        - 'stationid': get status for a specific station or stop
+            - 'stop_id' | 'stpid' | 'map_id' | 'mapid'
+        """
+        keys = kwargs.keys()
+        if "route" in keys:
+            routeid = kwargs["route"]
+        elif "routes" in keys:
+            routeid = kwargs["routes"]
+        elif "routeids" in keys:
+            routeid = kwargs["routeids"]
+        elif "route_ids" in keys:
+            routeid = kwargs["route_ids"]
+        elif "rt" in keys:
+            routeid = kwargs["rt"]
+        elif "line" in keys:
+            routeid = kwargs["line"]
+        elif "lines" in keys:
+            routeid = kwargs["line"]
+
+        for i in ("stop_id","map_id","mapid","stpid","station"):
+            if i in keys:
+                stationid = kwargs[i]
+                break
+            elif i+"s" in keys:
+                stationid = kwargs[i+"s"]
+                break
+
+        params = {
+            "outputType":"JSON"
+            }
+
+        if service is not None:
+            service = service.lower().replace(" ","")
+            if "train" in service:
+                service = service.replace("train","rail")
+            if "stop" in service:
+                service = service.replace("stop","station")
+            params["type"] = service
+
+        if routeid is not None:
+            routeid = str(routeid)
+            params["routeid"] = LINES.get(routeid.lower(),routeid)
+            
+        if stationid is not None:
+            params["stationid"] = stationid
+
+        url = self.__status
+        response = requests.get(url,params=params)
+        data = []
+        route_info = response.json()["CTARoutes"]["RouteInfo"]
+        try:
+            for ri in route_info:
+                data.append([
+                    ri.get("Route"),
+                    ri.get("ServiceId"),
+                    ri.get("RouteStatus"),
+                    ri.get("RouteStatusColor"),
+                    ri.get("RouteColorCode"),
+                    ri.get("RouteTextColor"),
+                    ri.get("RouteURL",{}).get("#cdata-section"),
+                ])
+        except:
+            data = []
+            data.append([
+                route_info.get("Route"),
+                route_info.get("ServiceId"),
+                route_info.get("RouteStatus"),
+                route_info.get("RouteStatusColor"),
+                route_info.get("RouteColorCode"),
+                route_info.get("RouteTextColor"),
+                route_info.get("RouteURL",{}).get("#cdata-section"),
+            ])
+
+        df = pd.DataFrame(data=data,columns=("service","service_id","status","status_color","route_color","route_text","url"))
+        return df
+
+    def details(self,activeonly=False,accessibility=True,planned=None,routeid=None,stationid=None,bystartdate=None,recentdays=None,**kwargs):
+        """
+        Get full details of alerts
+
+        Params:
+        -------
+        - 'activeonly': Default FALSE; if set to TRUE, response yields events only where the start time is in the past and the end time is in the future (or unknown)
+        - 'accessibility': Default TRUE; if set to FALSE, response excludes events that affect accessible paths in stations
+        - 'planned': Default TRUE; if set to FALSE, response excludes common planned alerts and includes only UNplanned alerts
+        - 'bystartdate': (YYYYmmdd) if specified, response includes only events with a start date pre-dating the one specified
+            - excludes events that don't begin until on or after the specified point in the future
+        - 'recentdays': if specified, yields events that have started within 'x' number of days before today
+        - 'routeid': get status for a specific route/'L'-line
+            - 'route' | 'rt' | 'line'
+        - 'stationid': get status for a specific station or stop
+            - 'stop_id' | 'stpid' | 'map_id' | 'mapid'        
+        """
+        activeonly = kwargs.get("active",activeonly)
+
+        accessibility = kwargs.get(
+            "accessible",kwargs.get(
+                "handicapped",accessibility
+            )
+        )
+        routeid = kwargs.get(
+            "route",kwargs.get(
+                "rt",kwargs.get(
+                    "line",routeid
+                )
+            )
+        )
+        stationid = kwargs.get(
+            "stop_id",kwargs.get(
+                "map_id",kwargs.get(
+                    "stpid",kwargs.get(
+                        "mapid",stationid
+                    )
+                )
+            )
+        )
+        bystartdate = kwargs.get(
+            "start_date",kwargs.get(
+                "startdate",kwargs.get(
+                    "startDate",kwargs.get(
+                        "start",kwargs.get(
+                            "from",kwargs.get(
+                                "from_date",kwargs.get(
+                                    "fromDate",bystartdate
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        recentdays = kwargs.get(
+            "pastdays",kwargs.get(
+                "last",kwargs.get(
+                    "numdays",recentdays
+                )
+            )
+        )
+
+        params = {
+            "outputType":"JSON",
+            "activeonly":activeonly,
+            "accessibility":accessibility,
+            "planned":planned}
+        
+        if routeid is not None:
+            params["routeid"] = routeid
+        if stationid is not None:
+            params["stationid"] = stationid
+        if bystartdate is not None:
+            params["bystartdate"] = bystartdate
+        if recentdays is not None:
+            params["recentdays"] = recentdays
+
+        url = self.__details
+        response = requests.get(url,params=params)
+        data = []
+        cta_alerts = response.json()["CTAAlerts"]
+        for a in cta_alerts["Alert"]:
+            service = a.get("ImpactedService",{}).get("Service")
+            description = a.get("FullDescription",{}).get("#cdata-section")
+            soup = bs(description,"html5lib")
+            css = a.get("SeverityCSS")
+            start = a.get("EventStart")
+            end = a.get("EventEnd")
+            all_ps = soup.find_all("p")
+            # info = self.__simplify_soup(soup,css)
+            desc = soup.text.strip().replace("\xa0"," ")
+            if type(service) is list:
+                for s in service:
+                    data.append([
+                        s.get("ServiceType"),
+                        s.get("ServiceTypeDescription"),
+                        s.get("ServiceName"),
+                        s.get("ServiceId"),
+                        s.get("ServiceBackColor"),
+                        s.get("ServiceTextColor"),
+                        a.get("AlertId"),
+                        a.get("Headline"),
+                        desc,
+                        soup,
+                        # info,
+                        a.get("SeverityScore"),
+                        a.get("SeverityColor"),
+                        css,
+                        a.get("Impact"),
+                        start,
+                        end,
+                        a.get("TBD"),
+                        a.get("MajorAlert")
+                        ])
+            elif type(service) is dict:
+                data.append([
+                    service.get("ServiceType"),
+                    service.get("ServiceTypeDescription"),
+                    service.get("ServiceName"),
+                    service.get("ServiceId"),
+                    service.get("ServiceBackColor"),
+                    service.get("ServiceTextColor"),
+                    a.get("AlertId"),
+                    a.get("Headline"),
+                    desc,
+                    soup,
+                    # info,
+                    a.get("Impact"),
+                    a.get("SeverityScore"),
+                    a.get("SeverityColor"),
+                    css,
+                    start,
+                    end,
+                    a.get("TBD"),
+                    a.get("MajorAlert")
+                ])
+        
+        df = pd.DataFrame(data=data,columns=(
+            "type_id",
+            "type",
+            "name",
+            "service_id",
+            "service_color",
+            "service_text",
+            "alert_id",
+            "headline",
+            "desc",
+            "desc_html",
+            # "info",
+            "impact",
+            "score",
+            "color",
+            "css",
+            "start",
+            "end",
+            "tbd",
+            "major"))
+        
+        return df
+    
+    def __simplify_soup(self,soup,css):
+        all_ps = soup.find_all("p")
+        if css == "normal":
+            if len(all_ps) == 3:
+                t1 = normalize("NFKD",all_ps[0].text.replace("How does this affect my trip?","").replace("\n"," ").replace("\r","").strip())
+                t2 = normalize("NFKD",all_ps[1].text.strip())
+                t3 = normalize("NFKD",all_ps[2].text.strip().replace("Why is service being changed?","").replace("\n"," ").replace("\r","").strip())
+                info = f'{t1}<N>{t2}<N>{t3}'
+            elif len(all_ps) == 2:
+                t1 = normalize("NFKD",all_ps[0].text.replace("How does this affect my trip?","").replace("\n"," ").replace("\r","").strip())
+                t2 = normalize("NFKD",all_ps[1].text.strip().replace("Why is service being changed?","").replace("\n"," ").replace("\r","").strip())
+                info = f'{t1}<N>{t2}'
+        else:
+            info = "--"
+        # elif css == "planned":
+        #     desc1 = normalize("NFKD",all_ps[0].text.replace("How does this affect my trip?\r\n","").strip())
+        #     desc2 = normalize("NFKD",all_ps[1].text.strip())
+        #     desc3 = normalize("NFKD",all_ps[2].text.strip().replace("Why is service being changed?\r\n","").strip())
+        # elif css == "Elevator Status":
+        #     desc1 = normalize("NFKD",all_ps[0].text.replace("How does this affect my trip?\r\n","").strip())
+        #     desc2 = normalize("NFKD",all_ps[1].text.strip())
+        #     desc3 = normalize("NFKD",all_ps[2].text.strip().replace("Why is service being changed?\r\n","").strip())
+        # elif css == "Minor":
+        #     desc1 = normalize("NFKD",all_ps[0].text.replace("How does this affect my trip?\r\n","").strip())
+        #     desc2 = normalize("NFKD",all_ps[1].text.strip())
+        #     desc3 = normalize("NFKD",all_ps[2].text.strip().replace("Why is service being changed?\r\n","").strip())
+        # elif css == "Major":
+        #     desc1 = normalize("NFKD",all_ps[0].text.replace("How does this affect my trip?\r\n","").strip())
+        #     desc2 = normalize("NFKD",all_ps[1].text.strip())
+        #     desc3 = normalize("NFKD",all_ps[2].text.strip().replace("Why is service being changed?\r\n","").strip())
+        return info
+
+
 
 # ====================================================================================================
 # Other
