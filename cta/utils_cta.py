@@ -12,15 +12,29 @@ from .constants import CTA_BUS_API_KEY
 from .constants import ALT_BUS_API_KEY
 from .constants import STOP_COLS
 
+STOPS_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/stops.txt')
+TRIPS_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/trips.txt')
+ROUTES_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/routes.txt')
+SHAPES_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/shapes.txt')
+CALENDAR_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/calendar.txt')
+CALENDAR_DATES_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/calendar_dates.txt')
+TRANSFERS_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/transfers.txt')
+STOP_TIMES_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/stop_times.txt')
+ROUTE_TRANSFERS_CSV_PATH = os.path.join(os.path.dirname(__file__), 'cta_route_transfers.csv')
+TRAIN_STATIONS_CSV_PATH = os.path.join(os.path.dirname(__file__), 'cta_train_stations.csv')
+BUS_ROUTES_CSV_PATH = os.path.join(os.path.dirname(__file__), 'cta_bus_routes.csv')
+UPDATED_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/updated.txt')
+GTFS_DATA_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/')
+
 # 0-29999       = Bus stops
 # 30000-39999   = Train stops
 # 40000-49999   = Train stations (parent stops)
 
-def stop_search(query,hide_desc_col=False) -> pd.Series | pd.DataFrame:
+def stop_search(query,rtdir=None,hide_desc_col=False) -> pd.Series | pd.DataFrame:
     """
     Search for a CTA stop/station by name.
     """
-    df = get_stops()
+    df = get_stops().astype('str')
     q = query.lower().replace("and","&")
     if "&" in q:
         q_list = str(q).split("&")
@@ -37,11 +51,34 @@ def stop_search(query,hide_desc_col=False) -> pd.Series | pd.DataFrame:
                 results.append(df.iloc[idx])
 
     df = pd.DataFrame(results)
-    df["stop_desc"].str.slice(df["stop_desc"].str.find(", ")+2)
+    route_dirs = []
+    for desc in df.stop_desc:
+        if "northbound" in desc.lower():
+            route_dirs.append("N")
+        elif "southbound" in desc.lower():
+            route_dirs.append("S")
+        elif "westbound" in desc.lower():
+            route_dirs.append("W")
+        elif "eastbound" in desc.lower():
+            route_dirs.append("E")
+        else:
+            route_dirs.append("-")
+    df.insert(4,"rtdir",route_dirs)
+    if rtdir is not None:
+        rtdir = rtdir.lower()
+        if "north" in rtdir:
+            rtdir = 'n'
+        elif "south" in rtdir:
+            rtdir = 's'
+        elif "west" in rtdir:
+            rtdir = 'w'
+        elif "east" in rtdir:
+            rtdir = 'e'
+        df = df[df["rtdir"].str.lower()==rtdir]
     if hide_desc_col is True:
-        return df.drop(columns=["stop_desc"])
+        return df.drop(columns=["stop_desc"]).reset_index(drop=True)
     else:
-        return df
+        return df.reset_index(drop=True)
 
 def split_datetime(dt_str):
     r = dt_str
@@ -74,41 +111,82 @@ def filter_direction(direction):
     
     return direction
 
+def get_direction_symbol(direction):
+    if direction.lower() in ("north","northbound","north bound","n"):
+        return "N"
+    elif direction.lower() in ("south","southbound","south bound","s"):
+        return "S"
+    elif direction.lower() in ("east","eastbound","east bound","e"):
+        return "E"
+    elif direction.lower() in ("west","westbound","west bound","w"):
+        return "W"
+
+def translate_bus_dir(row):
+    if "northbound" in row["stop_desc"].lower():
+        return "N"
+    elif "southbound" in row["stop_desc"].lower():
+        return "S"
+    elif "eastbound" in row["stop_desc"].lower():
+        return "E"
+    elif "westbound" in row["stop_desc"].lower():
+        return "W"
+
 def get_stops():
-    df = pd.read_csv(os.path.abspath("./cta/cta_google_transit/stops.txt"),index_col=False,dtype={"stop_id":"str","stop_code":"str","parent_station":"str"})
+    df = pd.read_csv(STOPS_TXT_PATH,index_col=False,dtype={"stop_id":"str","stop_code":"str","parent_station":"str"})
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/stops.txt"),index_col=False,dtype={"stop_id":"str","stop_code":"str","parent_station":"str"})
     df.rename(columns={"parent_station":"map_id"},inplace=True)
     return df
 
 def get_trips():
-    df = pd.read_csv(os.path.abspath("./cta/cta_google_transit/trips.txt"),index_col=False,dtype="str")
+    df = pd.read_csv(TRIPS_TXT_PATH,index_col=False,dtype="str")
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/trips.txt"),index_col=False,dtype="str")
+    return df
+
+def get_routes():
+    df = pd.read_csv(ROUTES_TXT_PATH,index_col=False,dtype="str")
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/trips.txt"),index_col=False,dtype="str")
+    return df
+
+def get_shapes():
+    df = pd.read_csv(SHAPES_TXT_PATH,index_col=False,dtype="str")
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/transfers.txt"),index_col=False,dtype="str")
     return df
 
 def get_calendar():
-    df = pd.read_csv(os.path.abspath("./cta/cta_google_transit/calendar.txt"),index_col=False,dtype="str")
+    df = pd.read_csv(CALENDAR_TXT_PATH,index_col=False,dtype="str")
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/calendar.txt"),index_col=False,dtype="str")
     return df
 
 def get_transfers():
-    df = pd.read_csv(os.path.abspath("./cta/cta_google_transit/transfers.txt"),index_col=False,dtype="str")
+    df = pd.read_csv(TRANSFERS_TXT_PATH,index_col=False,dtype="str")
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/transfers.txt"),index_col=False,dtype="str")
     return df
 
 def get_stop_times():
-    df = pd.read_csv(os.path.abspath("./cta/cta_google_transit/stop_times.txt"),index_col=False,dtype={"trip_id":"str","stop_id":"int","shape_dist_traveled":"int"})
+    df = pd.read_csv(STOP_TIMES_TXT_PATH,index_col=False,dtype="str")
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/stop_times.txt"),index_col=False,dtype={"trip_id":"str","stop_id":"int","shape_dist_traveled":"int"})
+    return df
+
+def get_calendar_dates():
+    df = pd.read_csv(CALENDAR_DATES_TXT_PATH,index_col=False,dtype="str")
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/transfers.txt"),index_col=False,dtype="str")
     return df
 
 def get_route_transfers():
-    df = pd.read_csv(os.path.abspath("./cta/cta_route_transfers.csv"),index_col=False)
+    df = pd.read_csv(ROUTE_TRANSFERS_CSV_PATH,index_col=False,dtype="str")
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_route_transfers.csv"),index_col=False)
     return df
 
 def update_route_transfers():
     url = "https://www.transitchicago.com/downloads/sch_data/CTA_STOP_XFERS.txt"
-    names = ['rt','pathway_mode','stop_name','stop_id','stop_lat','stop_lon','map_id_ext','transfers']
+    names = ['rt','pathway_mode','stop_name','stop_id','stop_lat','stop_lon','heading','transfers']
     df = pd.read_csv(url,delimiter=",",names=names,index_col=False)
-    new_order = ['rt','pathway_mode','stop_name','stop_id','map_id_ext','stop_lat','stop_lon','transfers']
-    df.to_csv(os.path.abspath("./cta/cta_route_transfers.csv"),index=False)
+    df.to_csv(ROUTE_TRANSFERS_CSV_PATH,index=False)
+    # df.to_csv(os.path.abspath("./cta/cta/cta_route_transfers.csv"),index=False)
 
 def get_train_stations():
-    df = pd.read_csv(os.path.abspath("./cta/cta_train_stations.csv"),index_col=False,dtype={"stop_id":"str"})
-    new_order = ['stop_id','map_id','stop_name','station_name','station_descriptive_name','direction_id','ada','red','blue','green','brown','purple','purple_exp','yellow','pink','orange','lat','lon']
+    df = pd.read_csv(TRAIN_STATIONS_CSV_PATH,index_col=False,dtype={"stop_id":"str","map_id":"str"})
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_train_stations.csv"),index_col=False,dtype={"stop_id":"str"})
     return df
 
 def update_train_stations():
@@ -157,15 +235,16 @@ def update_train_stations():
         ]
         data.append(row_data)
     df = pd.DataFrame(data=data,columns=columns)
-    df.to_csv(os.path.abspath("./cta/cta_train_stations.csv"),index=False)
+    df.to_csv(TRAIN_STATIONS_CSV_PATH,index=False)
+    # df.to_csv(os.path.abspath("./cta/cta/cta_train_stations.csv"),index=False)
 
 def get_bus_routes():
-    df = pd.read_csv(os.path.abspath("./cta/cta_bus_routes.csv"),index_col=False)
+    df = pd.read_csv(BUS_ROUTES_CSV_PATH,index_col=False)
+    # df = pd.read_csv(os.path.abspath("./cta/cta/cta_bus_routes.csv"),index_col=False)
     return df
 
 def update_bus_routes():
-    params = {
-        "format":"json"}
+    params = {"format":"json"}
     key = CTA_BUS_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_BUS_API_KEY
     url = CTA_BUS_BASE + f"/getroutes?key={key}"
     response = requests.get(url,params=params)
@@ -174,12 +253,10 @@ def update_bus_routes():
         row_data = [r["rt"],r["rtnm"],r["rtclr"],r["rtdd"]]
         data.append(row_data)
     df = pd.DataFrame(data=data,columns=["rt","rtnm","rtclr","rtdd"])
-
-    df.to_csv(os.path.abspath("./cta/cta_bus_routes.csv"),index=False)
+    df.to_csv(BUS_ROUTES_CSV_PATH,index=False)
 
 def get_bus_route_stops(route,direction):
     direction = filter_direction(direction)
-    
     params = {
         "key":CTA_BUS_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_BUS_API_KEY,
         "rt":route,
@@ -201,8 +278,10 @@ def get_bus_route_stops(route,direction):
 def update_static_feed(force_update=False):
     """Retrieves updated zip file, extracts .txt files and saves to 'cta_google_transit' folder"""
     with requests.Session() as sesh:
-        with open(os.path.abspath("./cta/cta_google_transit/updated.txt"),"r") as txtfile:
+        with open(UPDATED_TXT_PATH,"r") as txtfile:
             last_time_downloaded = txtfile.read()
+        # with open(os.path.abspath("./cta/cta/cta_google_transit/updated.txt"),"r") as txtfile:
+        #     last_time_downloaded = txtfile.read()
 
         feed_url = "https://www.transitchicago.com/downloads/sch_data/"
         feed_response = sesh.get(feed_url)
@@ -217,10 +296,13 @@ def update_static_feed(force_update=False):
             url = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"
             response = sesh.get(url,stream=True)
             z = zipfile.ZipFile(BytesIO(response.content))
-            z.extractall(os.path.abspath("./cta/cta_google_transit/"))
-
-            with open(os.path.abspath("./cta/cta_google_transit/updated.txt"),"w+") as txtfile:
+            z.extractall(GTFS_DATA_PATH)
+            # z.extractall(os.path.abspath("./cta/cta/cta_google_transit/"))
+            
+            with open(UPDATED_TXT_PATH,"w+") as txtfile:
                 txtfile.write(timestamp)
+            # with open(os.path.abspath("./cta/cta/cta_google_transit/updated.txt"),"w+") as txtfile:
+            #     txtfile.write(timestamp)
         else:
             print("CTA static feed is already up to date")
 
@@ -228,6 +310,7 @@ def check_feed():
     """
     Fetches the CTA's GTFS transit feed directory to check the last time the feed was updated
     """
+    
     url = "https://www.transitchicago.com/downloads/sch_data/"
     response = requests.get(url)
     soup = bs(response.text,"lxml")
@@ -239,8 +322,10 @@ def check_feed():
 
 def last_feed_update():
     """Gets the last time the user updated the local machine's CTA GTFS transit directory"""
-    with open(os.path.abspath("./cta/cta_google_transit/updated.txt"),"r") as txtfile:
+    with open(UPDATED_TXT_PATH,"r") as txtfile:
         return txtfile.read()
+    # with open(os.path.abspath("./cta/cta/cta_google_transit/updated.txt"),"r") as txtfile:
+    #     return txtfile.read()
 
 def update_all():
     update_bus_routes()
@@ -248,6 +333,8 @@ def update_all():
     update_route_transfers()
     update_static_feed(True)
 
+def get_parent_stop():
+    pass
 
 
 

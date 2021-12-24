@@ -163,9 +163,90 @@ def get_distance(x1,y1,x2,y2,unit='ft'):
     y2 = round(float(y2),15)
     point1 = (x1,y1)
     point2 = (x2,y2)
-    dist_in_miles = haversine(point1,point2,unit=unit)
-    return dist_in_miles
+    dist = haversine(point1,point2,unit=unit)
+    return dist
 
+def locate(**kwargs):
+    """
+    Get location info by query, latitude/longitude, address details and other keyword arguments
+
+    Keyword Args by Search Type:
+    -------------
+    - Simple Query (CONDITIONALLY REQUIRED)
+        - 'query' | 'q'
+
+    - Coordinates (CONDITIONALLY REQUIRED)
+        - 'latitude' | 'lat'
+        - 'longitude' | 'lon'
+
+    - Address Details (CONDITIONALLY REQUIRED)
+        - 'street' | 'address' | 'addr' |'a'
+        - 'city' | 'c' | 'town' | 't'
+        - 'statecode' | 'state' | 'st' | 's'
+        - 'countrycode' | 'country' | 'cc'
+            - default = "us"
+        - 'zipcode' | 'zip' | 'postalcode' | 'zc' | 'pc'
+
+    - Other (OPTIONAL)
+        - 'limit' (the amount of results to display)
+            - default = 1
+    """
+    params = {
+        "format":"jsonv2",
+        "limit":1,
+        "country":"us",
+        "addressdetails":1}
+    areCoords = False
+    if "lat" in kwargs.keys():
+        params["lat"] = kwargs["lat"]
+        areCoords = True
+    elif "latitude" in kwargs.keys():
+        params["lat"] = kwargs["latitude"]
+        areCoords = True
+    if "lon" in kwargs.keys():
+        params["lon"] = kwargs["lon"]
+        areCoords = True
+    elif "longitude" in kwargs.keys():
+        params["lat"] = kwargs["longitude"]
+        areCoords = True
+    
+    if areCoords is True:
+        response = requests.get("https://nominatim.openstreetmap.org/reverse.php?",params=params)
+        return response.json()
+    
+    for key,val in kwargs.items():
+        if key.lower() in ("zip","zipcode","postalcode","zc","pc"):
+            params["postalcode"] = val
+        elif key.lower() in ('statecode','state','st','s'):
+            params["state"] = val
+        elif key.lower() in ('countrycode','country','cc'):
+            params["country"] = val
+        elif key.lower() == 'county':
+            params["county"] = val
+        elif key.lower() == "max":
+            params["limit"] = val
+        elif key.lower() == "q":
+            params["q"] = val
+        elif key.lower() == "query":
+            params["q"] = val
+        elif key.lower() in ("city","town","c","t"):
+            params["city"] = val
+        elif key.lower() in ("address","addr","street","a"):
+            params["street"] = val
+        else:
+            print(f"{key} is not a valid argument")
+
+    response = requests.get("https://nominatim.openstreetmap.org/search?",params=params)
+    return response.json()
+
+def get_coordinates(query) -> tuple:
+    """
+    Returns a tuple of geo coordinates based on the 'query'
+    """
+    resp = locate(q=query)
+    lat = resp[0]["lat"]
+    lon = resp[0]["lon"]
+    return (lat,lon)
 
 
 

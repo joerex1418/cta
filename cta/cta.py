@@ -2,19 +2,21 @@ import lxml
 import html5lib
 import requests
 import pandas as pd
-from pprint import pformat
+from pprint import pformat, pprint
 from unicodedata import normalize
 from bs4 import BeautifulSoup as bs
 
-from requests.models import Response
-
 from .constants import *
 
+from .utils import locate
+from .utils import get_coordinates
+from .utils import geolocate
 from .utils import prettify_time
 from .utils import get_distance
 from .utils import ISO_FMT_ALT
 
 from .utils_cta import *
+
 
 # ====================================================================================================
 # CTA Bus Objects 
@@ -27,7 +29,7 @@ class BusRoute:
     Required Attributes
     -------------------
     - 'route': alphanumeric bus number
-    - 'direction': the general direction of travel ("Northbound","Southbound","Westbound","Eastbound")
+    - 'direction': the general direction of travel ("Northboud nd","Southbound","Westbound","Eastbound")
         - Shorthand allowed - > 'n'/'north', 'e'/'east', 's'/'south', 'w'/'west'
     """
     def __init__(self,route,direction):
@@ -52,6 +54,18 @@ class BusRoute:
         Returns dataframe of stops serviced by the Bus
         """
         return self.__stops
+    
+    def stops_by_distance(self,latitude,longitude,limit=1) -> pd.DataFrame:
+        """
+        Return the 'stops' dataframe, sorted by distance to given latitude & longitude
+
+        Params:
+        -------
+        - latitude (required)
+        - longitude (required)
+        """
+        return self.__sort_by_shortest_distance(latitude,longitude,self.__stops).head(limit).reset_index(drop=True)
+
 
     def vehicles(self,vid=None,update_on_call=True,update=None) -> pd.DataFrame:
         """
@@ -94,9 +108,10 @@ class BusRoute:
 
         - `sort_by`: column that will be used to sort the dataframe entries
         """
-        if str(stpid) not in list(self.__stops.stop_id):
-            print(f"Stop # {stpid} is not on this route")
-            return None
+        if stpid is not None:
+            if str(stpid) not in list(self.__stops.stop_id):
+                print(f"Stop # {stpid} is not on this route")
+                return None
         if dt.datetime.now().time() < dt.time(16,0,0):
             key = CTA_BUS_API_KEY
         else:
@@ -152,6 +167,14 @@ class BusRoute:
         """
         return self.__pids
 
+    def __sort_by_shortest_distance(self,curr_lat,curr_lon,stop_df):
+        stop_df_records = stop_df.to_dict("records")
+        distances = []
+        for coords in stop_df_records:
+            distances.append(get_distance(curr_lat,curr_lon,coords["lat"],coords["lon"]))
+        stop_df["dist"] = distances
+        return stop_df.sort_values(by="dist",ascending=True)
+
     def __get_patterns(self):
         if dt.datetime.now().time() < dt.time(16,0,0):
             key = CTA_BUS_API_KEY
@@ -203,8 +226,7 @@ class BusRoute:
                 v.get("pdist","-"),
                 v.get("dly",None),
                 v.get("tatripid","-"),
-                v.get("tablockid","-"),
-                v.get("zone","")]
+                v.get("tablockid","-")]
             
             data.append(row_data)
         df = pd.DataFrame(data=data,columns=VEHICLE_COLS.values())
@@ -215,16 +237,64 @@ class BusRoute:
         else:
             self.__vehicles = df
 
+
     # ALIASES ---------------------
     locations = positions = vehicles
     arrivals = predictions
     # -----------------------------
 
 class BusStop:
-    def __init__(self,stop_id):
-        self.__stop_id = stop_id
+    """
+    # BusStop
 
-    def predictions(self):
+    A single bus stop or a "group" of bus stops
+
+    NOTE: Use cta.stop_search() to search for stop IDs by stop name
+
+    Positional Arguments (by search method):
+    ----------------------------------------
+    - By STOP ID:
+        1. stop_id: a single stop ID or comma-delimited list of stop IDs ("1863,1915"); MAX 10
+    - By ROUTE (gets closest stops)
+        1. route: a single route that services the stops closest to the specified location
+        2. direction: direction of the route service
+        3. location: coordinates (type tuple or list) or search query (type str)
+            - would recommend using coordinates. If entering an search query, use a specific address. Otherwise you will 
+            probably not get accurate results
+        - 'limit' (optional): Limit the number of stops queried; Default is 2
+            - Example: `limit=4` will yield the 4 closest stops to a specified locaton
+
+    """
+    def __init__(self,*args,limit=2):
+        if len(args) == 1:
+            self.__stop_id = str(args[0]).replace(" ","")
+            self.__route = None
+        else:
+            if len(args) != 3:
+                print("Second argument, address query (type str) or coordinates (type tuple or list) is required ")
+                return None
+            rt = args[0]
+            direction = filter_direction(args[1])
+            loc = args[2]
+            stops_df = self.__get_stops(rt,direction)
+            if type(loc) is str:
+                coords = get_coordinates(query=loc)
+            elif type(loc) is list or type(loc) is tuple:
+                coords = loc
+            lat = str(coords[0])
+            lon = str(coords[1])
+            self.__route = rt
+            close_stops_df = self.__sort_by_shortest_distance(lat,lon,stops_df).head(limit)
+            self.__stop_id = ",".join(list(close_stops_df["stop_id"]))
+    
+    def predictions(self,rt=None):
+        """
+        Get predictited arrival data for buses coming to this stop
+
+        Params:
+        -------
+        - 'rt': a single route ID or comma-delimited list of route IDs (optional)
+        """
         if dt.datetime.now().time() < dt.time(16,0,0):
             key = CTA_BUS_API_KEY
         else:
@@ -233,25 +303,43 @@ class BusStop:
             "key":key,
             "stpid":self.__stop_id,
             "format":"json"}
+        if rt is not None:
+            params["rt"] = rt
+
         url = CTA_BUS_BASE + "/getpredictions?"
         response = requests.get(url,params=params)
         data = []
         for p in response.json()["bustime-response"]["prd"]:
             row_data = []
-            for col in PREDICTION_COLS:
+            for col in PREDICTION_COLS.keys():
                 if col != "tmstmp":
-                    row_data.append(p.get(col,"-"))
+                    if col == "prdctdn":
+                        rem = p.get(col)
+                        row_data.append(f"{rem} mins" if rem!="DUE" else f"1 min")
+                    elif col == "typ":
+                        row_data.append(PRD_TYPES[p.get(col)])
+                    else:
+                        row_data.append(p.get(col))
                 else:
-                    ### NEED TO FIX THIS IN UTILS
-                    try:row_data.append(prettify_time(p.get(col,"-")))
-                    except:row_data.append(p.get(col,"-"))
+                    row_data.append(p.get(col))
             data.append(row_data)
         
-        df = pd.DataFrame(data=data,columns=PREDICTION_COLS.values())
+        df = pd.DataFrame(data=data,columns=PREDICTION_COLS.values()).sort_values(by=["stop_id","time_rem"],ascending=[True,True]).reset_index(drop=True)
+        return df
+    
+    def __get_stops(self,rt,direction):
+        df = get_bus_route_stops(rt,direction)
         return df
 
+    def __sort_by_shortest_distance(self,curr_lat,curr_lon,stop_df):
+        stop_df_records = stop_df.to_dict("records")
+        distances = []
+        for coords in stop_df_records:
+            distances.append(get_distance(curr_lat,curr_lon,coords["lat"],coords["lon"]))
+        stop_df["dist"] = distances
+        return stop_df.sort_values(by="dist",ascending=True)
+
     # ALIASES ---------------------
-    arrivals = predictions
     # -----------------------------
 
 class Bus:
@@ -304,8 +392,7 @@ class Bus:
                 v.get("pdist","-"),
                 v.get("dly",None),
                 v.get("tatripid","-"),
-                v.get("tablockid","-"),
-                v.get("zone","")]
+                v.get("tablockid","-")]
             
             data.append(row_data)
         df = pd.DataFrame(data=data,columns=VEHICLE_COLS.values())
@@ -361,6 +448,9 @@ class Bus:
             ptrn_sequences.append(pt)
         self.__pattern = ptrn_sequences
 
+    # ALIASES ------------------------------
+    vehicles = location = locations = position = positions = vehicle
+    # --------------------------------------
 # ====================================================================================================
 # CTA Train Objects
 # ====================================================================================================
@@ -383,7 +473,7 @@ class TrainRoute:
             self.__cols_for_stations_df = ["stop_id","stop_name","map_id","station_name","station_descriptive_name","direction_id",self.__filter_col,"lat","lon"]
 
     def __repr__(self) -> str:
-        return f"""<cta.Line object | {self.line_name}>"""
+        return f"""<cta.TrainRoute object | {self.line_name}>"""
 
     def stations(self,hide_desc_col=True,hide_other_lines=True):
         """
@@ -640,30 +730,76 @@ class TrainStation:
     # TrainStation
 
     Represents an instance of an "L" parent station specified by corresponding station ID or (map ID) or stop ID
+    
+    NOTE: Use cta.stop_search() to search for stop IDs by stop name
+
+    Positional Arguments (by search method):
+    ----------------------------------------
+    - By STATION ID:
+        1. station_id: a single stop ID or comma-delimited list of stop IDs; MAX 10
+    - By ROUTE (gets closest stops)
+        1. route: a single route/line that services the closest station
+        2. location: coordinates (type tuple or list) or search query (type str)
+            - would recommend using coordinates. If entering an search query, use a specific address. Otherwise you will 
+            probably not get accurate results
     """
-    def __init__(self,station_id):
+    def __init__(self,*args):
         isParent = False
-        if str(station_id)[0] == "3":   # station_id is for specific side of station
-            df = get_train_stations()
-            df = df[df.map_id==int(station_id)]
-            self.__map_id = station_id
-            self.__station_id = station_id
-        elif str(station_id)[0] == "4":
-            isParent = True
-            df = get_train_stations()   # station_id is for a parent station
-            df = df[df.map_id==int(station_id)]
-            self.__map_id = station_id
-            self.__station_id = station_id
-        df = get_train_stations()
+        if len(args) == 1:
+            station_id = str(args[0])
+            main_df = get_train_stations()
+            if station_id[0] == "3":          # station is a specific platform
+                df = main_df[main_df.stop_id==station_id]
+                self.__map_id = df.map_id.item()
+                # print("ID IS FOR STOP PLATFORM")
+                # print(self.__map_id)
+                self.__station_id = station_id
+            elif station_id[0] == "4":        # station is a parent station
+                isParent = True      
+                df = main_df[main_df.map_id==station_id]
+                self.__map_id = station_id
+                # print("ID IS FOR PARENT")
+                # print(self.__map_id)
+                self.__station_id = station_id
+
+        else:
+            if len(args) != 2:
+                print("Exactly TWO positional arguments required when searching for closest stops by route - 'route', 'location'")
+                print("Second argument, address query (type str) or coordinates (type tuple or list) is required")
+                return None
+            else:
+                main_df = get_train_stations()
+                rt = args[0].lower()
+                rt_stops_df = main_df[main_df[rt]==True]
+                loc = args[1]
+                # stops_df = self.__get_stops(rt,direction)
+                if type(loc) is str:
+                    coords = get_coordinates(query=loc)
+                elif type(loc) is list or type(loc) is tuple:
+                    coords = loc
+                lat = str(coords[0])
+                lon = str(coords[1])
+                close_stops_df = self.__sort_by_shortest_distance(lat,lon,rt_stops_df).head(1)
+                station_id = close_stops_df["map_id"].item()
+
+                if str(station_id)[0] == "3":          # station is a specific platform
+                    df = main_df[main_df.stop_id==str(station_id)]
+                    self.__map_id = station_id
+                    self.__station_id = station_id
+                elif str(station_id)[0] == "4":        # station is a parent station
+                    isParent = True      
+                    df = main_df[main_df.map_id==str(station_id)]
+                    self.__map_id = station_id
+                    self.__station_id = station_id
 
         if isParent is True:
-            self.__station_df = df[df.map_id==int(self.__station_id)]
+            self.__station_df = main_df[main_df.map_id==str(self.__station_id)]
         else:
-            self.__map_id = df[df.stop_id==int(self.__station_id)].map_id.item()
-            self.__station_df = df[df.map_id==int(self.__map_id)]
+            self.__map_id = main_df[main_df.stop_id==str(self.__station_id)].iloc[0].map_id
+            self.__station_df = main_df[main_df.map_id==str(self.__map_id)]
         
         df = self.__station_df
-        
+
         routes = {}
         line_list = []
         for c in COLOR_LABEL_LIST:
@@ -680,9 +816,9 @@ class TrainStation:
         self.__lon = df.iloc[0].lon
         self.__routes = routes
         self.__line_list = line_list
-
+    
     def __repr__(self):
-        return f"<cta.TrainStation Station: {self.__station_name} | Station ID: {self.__map_id}>"
+        return f"<cta.TrainStation Name: {self.__station_name} | ID: {self.__map_id}>"
 
     def station(self):
         station_dict = {
@@ -738,8 +874,6 @@ class TrainStation:
             params["rt"] = rt
         if max is not None:
             params["max"] = max
-        
-
 
         url = CTA_TRAIN_BASE + "/ttarrivals.aspx?"
         response = requests.get(url,params=params)
@@ -802,6 +936,15 @@ class TrainStation:
         df = self.__station_df
         station_row = df[df["stop_id"]==str(stpid)]
         return station_row.stop_name.item()
+
+    def __sort_by_shortest_distance(self,curr_lat,curr_lon,stop_df:pd.DataFrame):
+        stop_df_records = stop_df.to_dict("records")
+        distances = []
+        for coords in stop_df_records:
+            distances.append(get_distance(curr_lat,curr_lon,coords["lat"],coords["lon"]))
+        # stop_df["dist"] = distances
+        stop_df.insert(0,"dist",distances)
+        return stop_df.sort_values(by="dist",ascending=True)
     
     # Aliases ---------------------------------
     predictions = arrivals
@@ -901,13 +1044,13 @@ class StaticFeed:
     def __init__(self) -> None:
         pass
 
-    def stops(self,hide_desc_col=True) -> pd.DataFrame:
+    def stops(self) -> pd.DataFrame:
         """
         Returns dataframe of GTFS `stops.txt` file
 
         NOTE: Not 'real-time' data; intended for reference purposes
         """
-        df = get_stops()
+        df = get_stops().fillna("")
         # replacing NaN values with "-"
         df.fillna("-",inplace=True)
         # rearranging column order for better readability
@@ -927,33 +1070,13 @@ class StaticFeed:
                 route_dirs.append("-")
 
         df.insert(4,"rtdir",route_dirs)
-        if hide_desc_col == True:
-            return df.drop(columns=["stop_desc"])
-        else:
-            return df
-
-    def routes(self,update_data=False) -> pd.DataFrame:
-        """Retrieves locally saved bus route data from CTA Bus Tracker API
-
-        Params
-        ------
-        - `update_data`: (Default FALSE) Set to TRUE to have the data updated before returning it
-
-        Columns in returned dataframe
-        --------
-        `rt`: bus route id\n
-        `rtnm`:bus route name\n
-        `rtclr`:bus route color code (HEX CODE)\n
-        `rtdd`:bus route 'dd' code? (not completely sure tbh)
-
-        Note:
-        -----
-        Use cta.update_bus_routes() to ensure the most up-to-date data is being used
-        """
-        if update_data is True:
-            update_bus_routes()
-        df = get_bus_routes()
         return df
+
+    def routes(self) -> pd.DataFrame:
+        return get_routes()
+
+    def shapes(self) -> pd.DataFrame:
+        return get_shapes()
 
     def trips(self) -> pd.DataFrame:
         """
@@ -991,6 +1114,32 @@ class StaticFeed:
         df = get_stop_times()
         return df
 
+    def calendar_dates(self) -> pd.DataFrame:
+        return get_calendar_dates()
+
+    def bus_routes(self,update_data=False) -> pd.DataFrame:
+        """Retrieves locally saved bus route data from CTA Bus Tracker API
+
+        Params
+        ------
+        - `update_data`: (Default FALSE) Set to TRUE to have the data updated before returning it
+
+        Columns in returned dataframe
+        --------
+        `rt`: bus route id\n
+        `rtnm`:bus route name\n
+        `rtclr`:bus route color code (HEX CODE)\n
+        `rtdd`:bus route 'dd' code? (not completely sure tbh)
+
+        Note:
+        -----
+        Use cta.update_bus_routes() to ensure the most up-to-date data is being used
+        """
+        if update_data is True:
+            update_bus_routes()
+        df = get_bus_routes()
+        return df
+
 class BusTracker:
     """
     # BusTracker API
@@ -999,6 +1148,7 @@ class BusTracker:
     """
     def __init__(self):
         self.__stop_reference = get_stops()
+        self.__trips = get_trips().dropna()
 
     def __repr__(self) -> str:
         return f"""<cta.BusTracker>"""
@@ -1047,19 +1197,23 @@ class BusTracker:
         
         return pd.DataFrame(data=data,columns=("rt","rtnm","rtclr","rtdd"))
 
-    def vehicles(self,vid=None,rt=None,tmres='m') -> pd.DataFrame:
+    def vehicles(self,vid=None,rt=None,tmres=None) -> pd.DataFrame:
         """
         Returns dataframe of the geolocations for each vehicle along the route
 
         Params
         ------
-        - 
+        - 'vid'
+        - 'rt'
+        - 'tmres'
+        - 'get_directions'
         """
         params = {
             "key":CTA_BUS_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_BUS_API_KEY,
             "format":"json"
         }
-
+        if tmres is not None:
+            params["tmres"] = tmres
         if vid is not None:
             params["vid"] = vid
         elif rt is not None:
@@ -1068,27 +1222,33 @@ class BusTracker:
             print("must use one of the following params - 'vid', 'rt'")
             return None
 
-        url = CTA_BUS_BASE + "/getvehicles"
-        response = requests.get(url,params=params)
-        data = []
-        for v in response.json()["bustime-response"]["vehicle"]:
-            row_data = [
-                v.get("vid"),
-                v.get("tmstmp"),
-                v.get("lat"),
-                v.get("lon"),
-                v.get("hdg"),
-                v.get("pid"),
-                v.get("rt"),
-                v.get("des"),
-                v.get("pdist"),
-                v.get("dly"),
-                v.get("tatripid"),
-                v.get("tablockid"),
-                v.get("zone")]
-            
-            data.append(row_data)
-        df = pd.DataFrame(data=data,columns=VEHICLE_COLS.values())
+        with requests.Session() as sesh:
+            t = self.__trips
+            url = CTA_BUS_BASE + "/getvehicles"
+            response = sesh.get(url,params=params)
+            data = []
+            for v in response.json()["bustime-response"]["vehicle"]:
+                row_data = [
+                    v.get("vid"),
+                    v.get("tmstmp"),
+                    v.get("lat"),
+                    v.get("lon"),
+                    v.get("hdg"),
+                    v.get("pid"),
+                    v.get("rt"),
+                    v.get("des"),
+                    v.get("pdist"),
+                    v.get("dly"),
+                    v.get("tatripid"),
+                    v.get("tablockid")]
+                
+                data.append(row_data)
+            df = pd.DataFrame(data=data,columns=VEHICLE_COLS.values()).astype("str")
+            dirs = []
+            for i in range(len(df)):
+                s = df.iloc[i]
+                dirs.append(t[(t.shape_id.str.contains(s.pattern_id))&(t.route_id==s.route)].iloc[0]["direction"]+"bound")
+            df.insert(7,"direction",dirs)
         return df
 
     def predictions(self,stpid=None,vid=None,rt=None,top=None) -> pd.DataFrame:
@@ -1127,30 +1287,26 @@ class BusTracker:
         if top is not None:
             params["top"] = top
 
-        url = CTA_BUS_BASE + f"/getpredictions"
+        url = CTA_BUS_BASE + f"/getpredictions?"
 
         response = requests.get(url,params=params)
         data = []
         for p in response.json()["bustime-response"]["prd"]:
             row_data = []
-            for col in PREDICTION_COLS:
+            for col in PREDICTION_COLS.keys():
                 if col != "tmstmp":
-                    row_data.append(p.get(col))
+                    if col == "prdctdn":
+                        rem = p.get(col)
+                        row_data.append(f"{rem} mins" if rem!="DUE" else f"1 min")
+                    elif col == "typ":
+                        row_data.append(PRD_TYPES[p.get(col)])
+                    else:
+                        row_data.append(p.get(col))
                 else:
-                    try:row_data.append(p.get(col))
-                    except:row_data.append(p.get(col))
+                    row_data.append(p.get(col))
             data.append(row_data)
-        
-        # if sort_by is None:
-        #     pass
-        # elif sort_by == "vehicle" or sort_by == "vid":
-        #     df.sort_values(by="vid",ascending=True,inplace=True)
-        # elif sort_by == "stpid" or sort_by == "stop_id":
-        #     df.sort_values(by="stpid",ascending=True,inplace=True)
-        # elif sort_by == "stpnm" or sort_by == "stop_name" or sort_by == "stop":
-        #     df.sort_values(by="stop",ascending=True,inplace=True)
 
-        return pd.DataFrame(data=data,columns=PREDICTION_COLS.values()).sort_values(by=["vehicle_id","time_rem"],ascending=[True,True])
+        return pd.DataFrame(data=data,columns=PREDICTION_COLS.values()).sort_values(by=["vehicle_id","time_rem"],ascending=[True,True]).reset_index(drop=True)
 
     def directions(self,rt) -> list:
         params = {
@@ -1169,34 +1325,68 @@ class BusTracker:
     def stop_reference(self):
         return self.__stop_reference
 
-    def __patterns(self) -> list:
+    def patterns(self,pid=None,rt=None) -> list:
         """
-        **NOT CONFIGURED YET\n
         Returns an array of python dictionary for the Bus route points which, when mapped, can construct the geo-positional layout of a 'route variation'
+        
+        Params:
+        ------
+        - 'pid': comma-delimited list of pattern IDs
+        - 'rt': single route identifier to retrieve pattern sequences
         """
-        return self.__get_patterns()
+        if pid is None and rt is None:
+            print("must use either 'pid' or 'rt'")
+            return None
+        return self.__get_patterns(pid,rt)
 
-    def __get_patterns(self):
+    def stops_by_distance(self,latitude,longitude,limit=1) -> pd.DataFrame:
+        """
+        Return the 'stops' dataframe, sorted by distance to given latitude & longitude
+
+        Params:
+        -------
+        - latitude (required)
+        - longitude (required)
+        """
+        return self.__sort_by_shortest_distance(latitude,longitude,self.__stops).head(limit).reset_index(drop=True)
+
+    def __get_patterns(self,pid=None,rt=None):
         if dt.datetime.now().time() < dt.time(16,0,0):
             key = CTA_BUS_API_KEY
         else:
             key = ALT_BUS_API_KEY
         params = {
             "key":key,
-            "rt":self.__route,
             "format":"json"
         }
+        if pid is not None:
+            params["pid"] = pid
+        if rt is not None:
+            params["rt"] = rt
         url = CTA_BUS_BASE + f"/getpatterns?"
         response = requests.get(url,params=params)
         resp = response.json()["bustime-response"]
         patterns = resp["ptr"]
-        pids = []
-        for ptr in patterns:
-            if ptr["rtdir"] == self.__direction:
-                pids.append(ptr["pid"])
-        self.__pids = pids
 
         return patterns
+
+    def __sort_by_shortest_distance(self,curr_lat,curr_lon,stop_df):
+        stop_df_records = stop_df.to_dict("records")
+        distances = []
+        for coords in stop_df_records:
+            distances.append(get_distance(curr_lat,curr_lon,coords["lat"],coords["lon"]))
+        stop_df["dist"] = distances
+        return stop_df.sort_values(by="dist",ascending=True)
+
+
+
+    # ALIASES -----------------------
+    closest_stops = stops_by_distance
+    positions = locations = vehicles
+    arrivals = predictions
+    stop_ref = stop_reference
+
+    # -------------------------------
 
 class TrainTracker:
     """
@@ -1750,11 +1940,282 @@ class CustomerAlerts:
         #     desc3 = normalize("NFKD",all_ps[2].text.strip().replace("Why is service being changed?\r\n","").strip())
         return info
 
-
-
 # ====================================================================================================
 # Other
 # ====================================================================================================
+class StopSearch():
+    def __init__(self):
+        df = get_stops().rename(columns={"stop_lat":"lat","stop_lon":"lon"}).drop(columns=["map_id","stop_code","location_type"])
+        self.__cta_stops = df.dropna(subset=['stop_id']).astype({'stop_id':'int','stop_desc':'str'})
+        self.__route_stops = get_route_transfers().astype('str')
+        self.__train_stops = get_train_stations()
+
+        # self.__train_stations = get_train_stations()
+        # self.__train_stops = df[df.map_id.notna()]
+        # self.__bus_stops = df[df.map_id.isna()]
+
+    def find_stop(self,query,rtdir=None,hide_desc_col=False):
+        """
+        Search for a CTA stop/station by name.
+        """
+        df = get_stops().astype('str')
+        q = query.lower().replace("and","&")
+        if "&" in q:
+            q_list = str(q).split("&")
+            street1 = q_list[0].strip()
+            street2 = q_list[1].strip()
+            results = []
+            for idx,s in enumerate(df.stop_name):
+                if street1 in str(s).lower() and street2 in str(s).lower():
+                    results.append(df.iloc[idx])
+        else:
+            results = []
+            for idx,s in enumerate(df.stop_name):
+                if q in str(s).lower():
+                    results.append(df.iloc[idx])
+
+        df = pd.DataFrame(results)
+        route_dirs = []
+        for desc in df.stop_desc:
+            if "northbound" in desc.lower():
+                route_dirs.append("N")
+            elif "southbound" in desc.lower():
+                route_dirs.append("S")
+            elif "westbound" in desc.lower():
+                route_dirs.append("W")
+            elif "eastbound" in desc.lower():
+                route_dirs.append("E")
+            else:
+                route_dirs.append("-")
+        df.insert(4,"rtdir",route_dirs)
+        # df["stop_desc"].str.slice(df["stop_desc"].str.find(", ")+2)
+        if rtdir is not None:
+            rtdir = rtdir.lower()
+            if "north" in rtdir:
+                rtdir = 'n'
+            elif "south" in rtdir:
+                rtdir = 's'
+            elif "west" in rtdir:
+                rtdir = 'w'
+            elif "east" in rtdir:
+                rtdir = 'e'
+            df = df[df["rtdir"].str.lower()==rtdir]
+        if hide_desc_col is True:
+            return df.drop(columns=["stop_desc"]).reset_index(drop=True)
+        else:
+            return df.reset_index(drop=True)
+
+    def closest_stops(self,*args,routes=None,directions=None,limit=3,stop_type=None,exclude_stops=None,**kwargs):
+        """
+        Retrieve the closest bus and/or train stops near a given location (by coordinates)
+
+        Required Positional Args:
+        -------------------------
+        - coordinates (str | list | tuple)
+            - can be one arg as list (or tuple) of latitude & longitude
+            - can be one arg as comma-delimited coordinates (str or float)
+            - can be two separate args (str or float)
+        
+        Optional Parameters:
+        -------------------------
+        - 'routes':
+        - 'directions':
+        - 'limit':
+        - 'stop_type':
+        - 'exclude_stops':
+        """
+        train_stops_only = self.__train_stops
+        
+        # ------- ASSIGNING ALIASES TO SINGLE VARIABLES ----------
+
+        for key in ("route","line","lines"):
+            if key in kwargs.keys():
+                routes = kwargs[key].lower()
+                break
+        for key in ("dirs","rtdirs","dir_ids"):
+            if key in kwargs.keys():
+                directions = kwargs[key].lower()
+                break
+        for key in ("max","top"):
+            if key in kwargs.keys():
+                limit = kwargs[key]
+                break
+        for key in ("category","type"):
+            if key in kwargs.keys():
+                stop_type = kwargs[key].lower()
+                break
+        for key in ("exclude","excluded","exclude_stop","excluded_stops"):
+            if key in kwargs.keys():
+                exclude_stops = kwargs[key].lower()
+                break
+        
+        # ------- HANDLING DIRECTIONS PARAM  ---------------------
+        busdirs = None
+        traindirs = None
+        if directions is not None:
+            if type(directions) is str:
+                directions = directions.replace(" ","").split(",")
+                directions = list(map(get_direction_symbol,directions))
+                busdirs = directions
+                traindirs = directions
+            elif type(directions) is list or type(directions) is tuple:
+                directions = list(map(get_direction_symbol,directions))
+                busdirs = directions
+                traindirs = directions
+            else:
+                busdirs = directions.get("bus")
+                traindirs = directions.get("train")
+                if type(busdirs) is str:
+                    busdirs = busdirs.replace(" ","").split(",")
+                    busdirs = list(map(get_direction_symbol,busdirs))
+                elif type(busdirs) is list or type(busdirs) is tuple:
+                    busdirs = list(map(get_direction_symbol,busdirs))
+                if type(traindirs) is str:
+                    traindirs = traindirs.replace(" ","").split(",")
+                    traindirs = list(map(get_direction_symbol,traindirs))
+                elif type(traindirs) is list or type(traindirs) is tuple:
+                    traindirs = list(map(get_direction_symbol,traindirs))
+
+        # ------- DEALING WITH POSSIBLE TYPES FOR LIMIT PARAM ----
+
+        if type(limit) is list or type(limit) is tuple:
+            bus_limit = limit[0]
+            train_limit = limit[1]
+        elif type(limit) is dict:
+            bus_limit = limit.get('bus',3)
+            train_limit = limit.get('train',3)
+        else:
+            bus_limit = limit
+            train_limit = limit
+
+        # ------- DEALING WITH TYPES FOR POSITIONAL ARGS ---------
+
+        if len(args) == 1:
+            if type(args[0]) is tuple or type(args[0]) is list:
+                lat = args[0][0]
+                lon = args[0][1]
+            elif type(args) is str:
+                coords = args[0].replace(" ","").split(",")
+                lat = coords[0]
+                lon = coords[1]
+            else:
+                return None
+        elif len(args) == 2:
+            lat = args[0]
+            lon = args[1]
+        else:
+            print("Minimum ONE positional argument required, maximum TWO allowed")
+        
+        # ------- CREATING SEPARATE BUS/TRAIN STOPS --------------
+
+        # BUS STOPS
+        df = self.__cta_stops.copy()
+        bus_stop_df = df[df['stop_id']<30000]
+        # TRAIN STOPS
+        train_stop_df = df[df['stop_id'].between(30000,39999,'both')]
+
+        if routes is not None:
+            # ------- GETTING ONLY INCLUDED ROUTES ---------------
+            rtstops = self.__route_stops
+
+            if type(routes) is str:
+                routes = routes.replace(" ","").split(",")
+            elif type(routes) is list or type(routes) is tuple:
+                routes = routes
+
+            routes = list(map(str.title,routes))
+            rtstops_df = rtstops[rtstops["rt"].isin(routes)]
+
+            stops_to_filter_by = list(set(rtstops_df.stop_id))
+
+            # BUS STOPS
+            bus_stop_df = bus_stop_df[bus_stop_df["stop_id"].astype('str').isin(stops_to_filter_by)]
+
+            # TRAIN STOPS
+            train_stop_df = train_stop_df[train_stop_df["stop_id"].astype('str').isin(stops_to_filter_by)]
+
+        elif exclude_stops is not None:
+            # ------- FILTERING OUT EXCLUDED ROUTES --------------
+            rtstops = self.__route_stops
+
+            if type(exclude_stops) is str:
+                exclude_stops = exclude_stops.replace(" ","").split(",")
+            elif type(exclude_stops) is list or type(exclude_stops) is tuple:
+                exclude_stops = exclude_stops
+
+            exclude_stops = list(map(str.title,exclude_stops))
+
+            # BUS STOPS
+            bus_stop_df = bus_stop_df[~bus_stop_df["stop_id"].astype('str').isin(exclude_stops)]
+
+            # TRAIN STOPS
+            train_stop_df = train_stop_df[~train_stop_df["stop_id"].astype('str').isin(exclude_stops)]
+
+        
+
+        # ------- CALCULATING DISTANCES FROM STOPS ---------------
+
+        bus_stop_records = bus_stop_df.to_dict("records")
+        train_stop_records = train_stop_df.to_dict("records")
+        bus_stop_distances = []
+        train_stop_distances = []
+
+        # BUS STOPS
+        for rec in bus_stop_records:
+            bus_stop_distances.append(get_distance(lat,lon,rec["lat"],rec["lon"]))
+        
+        # TRAIN STOPS
+        for rec in train_stop_records:
+            train_stop_distances.append(get_distance(lat,lon,rec["lat"],rec["lon"]))
+
+        # ------- SORTING BY DISTANCE ----------------------------
+
+        # BUS STOPS
+        bus_stop_df.insert(len(bus_stop_df.columns),"dist",bus_stop_distances)
+        bus_stop_df = bus_stop_df.sort_values(by="dist",ascending=True)
+        bus_stop_df = bus_stop_df #.head(bus_limit)
+        bus_stop_df.insert(0,"type","bus")
+            # ---- CREATING BUS DIRECTIONS COL -------------------
+        bus_stop_df.insert(2,"dir",bus_stop_df.apply(lambda row: translate_bus_dir(row),axis=1))
+
+        # TRAIN STOPS
+        train_stop_df.insert(len(train_stop_df.columns),"dist",train_stop_distances)
+        train_stop_df = train_stop_df.sort_values(by="dist",ascending=True)
+        train_stop_df = train_stop_df #.head(train_limit)
+        train_stop_df.insert(0,"type","train")
+            # ---- CREATING TRAIN DIRECTIONS COL -----------------
+        train_dirs_data = []
+        for idx in range(len(train_stop_df)):
+            s = train_stop_df.iloc[idx]
+            train_dirs_data.append(train_stops_only[train_stops_only["stop_id"]==str(s.stop_id)].direction_id.item())
+        train_stop_df.insert(2,"dir",train_dirs_data)
+
+        # ------- FILTERING BY DIRECTIONS ------------------------
+        if busdirs is not None:
+            bus_stop_df = bus_stop_df[bus_stop_df["dir"].isin(busdirs)]
+        if traindirs is not None:
+            train_stop_df = train_stop_df[train_stop_df["dir"].isin(traindirs)]
+
+        bus_stop_df = bus_stop_df.head(bus_limit)
+        bus_stop_df = bus_stop_df.astype('str')
+        train_stop_df = train_stop_df.head(train_limit)
+        train_stop_df = train_stop_df.astype('str')
+        
+        if len(train_stop_df) == 0 or stop_type == "bus":
+            return bus_stop_df.reset_index(drop=True)
+        elif len(bus_stop_df) == 0 or stop_type == "train" or stop_type == "l" or stop_type == "rail":
+            return train_stop_df.reset_index(drop=True)
+        else:
+            return pd.concat([bus_stop_df,train_stop_df]).reset_index(drop=True)
+
+        
+
+    def lookup(self,query):
+        """
+        Retrieve details of a location by query
+        """
+        return locate(q=query)
+
 class TransitData:
     """
     # CTA Ridership (Socrata API)
@@ -1878,8 +2339,7 @@ def bus_locations(vid) -> pd.DataFrame:
             v.get("pdist","-"),
             v.get("dly",None),
             v.get("tatripid","-"),
-            v.get("tablockid","-"),
-            v.get("zone","")]
+            v.get("tablockid","-")]
         
         data.append(row_data)
     df = pd.DataFrame(data=data,columns=VEHICLE_COLS.values())

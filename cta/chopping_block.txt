@@ -1,0 +1,171 @@
+class TrainStation:
+    """
+    # TrainStation
+
+    Represents an instance of an "L" parent station specified by corresponding station ID or (map ID) or stop ID
+    """
+    def __init__(self,station):
+        isParent = False
+        if str(station)[0] == "3":   # station_id is for specific side of station
+            df = get_train_stations()
+            df = df[df.map_id==int(station)]
+            self.__map_id = station
+            self.__station_id = station
+        elif str(station)[0] == "4":
+            isParent = True
+            df = get_train_stations()   # station_id is for a parent station
+            df = df[df.map_id==int(station)]
+            self.__map_id = station
+            self.__station_id = station
+        df = get_train_stations()
+
+        if isParent is True:
+            self.__station_df = df[df.map_id==int(self.__station_id)]
+        else:
+            self.__map_id = df[df.stop_id==int(self.__station_id)].map_id.item()
+            self.__station_df = df[df.map_id==int(self.__map_id)]
+        
+        df = self.__station_df
+        
+        routes = {}
+        line_list = []
+        for c in COLOR_LABEL_LIST:
+            if True in list(df[c]):
+                line_list.append(c)
+                routes[c] = {
+                    "line":LINE_NAMES[LINES[c]],
+                    "label":LINE_LABELS[LINES[c]],
+                    "code":LINES[c]}
+        
+        self.__station_name = df.iloc[0].station_name
+        self.__description = df.iloc[0].station_descriptive_name
+        self.__lat = df.iloc[0].lat
+        self.__lon = df.iloc[0].lon
+        self.__routes = routes
+        self.__line_list = line_list
+
+    def __repr__(self):
+        return f"<cta.TrainStation Name: {self.__station_name} | ID: {self.__map_id}>"
+
+    def station(self):
+        station_dict = {
+            "station_name":self.__station_name,
+            "description":self.__description,
+            "station_id":self.__station_id,
+            "lat":self.__lat,
+            "lon":self.__lon
+        }
+        return pd.Series(station_dict)
+    
+    def stops(self):
+        """
+        Get dataframe of the parent station's separate stops/platforms (going separate directions)
+        """
+        df = self.__station_df
+        return df[["stop_id","stop_name","station_name","direction_id","map_id","ada"]+self.__line_list]
+
+    def routes(self):
+        """
+        Show all possible routes that are serviced by the station
+        """
+        return self.__routes
+
+    def arrivals(self,rt=None,max=None,route=None,line=None,limit=None,top=None,hide_desc_col=True):
+        """
+        Returns dataframe of estimated arrival times & locations for the station
+        
+        Params:
+        -------
+        - 'rt': can be used to specify a single route that comes through the station
+            - 'route':ALIAS for 'rt'
+            - 'line': ALIAS for 'rt'
+        - 'max': limits the amount of results shown
+            - 'limit':ALIAS for 'max'
+            - 'top':ALIAS for 'max'
+
+        Method ALIAS: 'predictions'
+        """
+        if route is not None:
+            rt = route
+        if line is not None:
+            rt = line
+        if top is not None:
+            max = top
+        if limit is not None:
+            max = limit
+        params = {
+            "key":CTA_TRAIN_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_TRAIN_API_KEY,
+            "mapid":self.__map_id,
+            "outputType":"JSON"}
+        if rt is not None:
+            params["rt"] = rt
+        if max is not None:
+            params["max"] = max
+        
+
+
+        url = CTA_TRAIN_BASE + "/ttarrivals.aspx?"
+        response = requests.get(url,params=params)
+
+        ctatt = response.json()["ctatt"]
+        timestamp = ctatt.get("tmst")
+        timestamp_obj = dt.datetime.strptime(timestamp,ISO_FMT_ALT)
+        arrvs = ctatt["eta"]
+        data = []
+        for a in arrvs:
+            prdt = a.get("prdt")
+            prdt_obj = dt.datetime.strptime(prdt,ISO_FMT_ALT)
+            arrT = a.get("arrT")
+            arrT_obj = dt.datetime.strptime(arrT,ISO_FMT_ALT)
+            due_in = int((arrT_obj - prdt_obj).seconds / 60)
+            due_in = 'Due' if due_in == 1 else f'{due_in} mins'
+            time_since_update = timestamp_obj - prdt_obj
+            time_since_update = f'{time_since_update.seconds} seconds ago'
+
+            # Col-value definitions:
+            stop_id = a.get("stpId")
+            stop_name = self.__get_stop_name(stop_id)
+            map_id = a.get("staId")
+            station_name = a.get("staNm")
+            station_desc = a.get("stpDe")
+            run_num = a.get("rn")
+            rt = FILTER_COL[a.get("rt")]
+            dest_stop = a.get("destSt")
+            dest_name = a.get("destNm")
+            trDr = a.get("trDr")
+            data.append([
+                stop_id,
+                stop_name,
+                map_id,
+                station_name,
+                station_desc,
+                run_num,
+                rt,
+                dest_stop,
+                dest_name,
+                trDr,
+                prettify_time(prdt),
+                prettify_time(arrT),
+                due_in,
+                time_since_update,
+                a.get("isApp"),
+                a.get("isSch"),
+                a.get("isDly"),
+                a.get("isFlt"),
+                a.get("flags"),
+                a.get("lat"),
+                a.get("lon"),
+                a.get("heading")])
+        df = pd.DataFrame(data=data,columns=L_ARRIVALS_COLS)
+        if hide_desc_col is True:
+            return df.drop(columns=["station_desc"])
+        return df
+
+    def __get_stop_name(self,stpid):
+        df = self.__station_df
+        station_row = df[df["stop_id"]==str(stpid)]
+        return station_row.stop_name.item()
+    
+    # Aliases ---------------------------------
+    predictions = arrivals
+    # -----------------------------------------
