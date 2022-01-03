@@ -451,6 +451,7 @@ class Bus:
     # ALIASES ------------------------------
     vehicles = location = locations = position = positions = vehicle
     # --------------------------------------
+
 # ====================================================================================================
 # CTA Train Objects
 # ====================================================================================================
@@ -559,6 +560,7 @@ class TrainRoute:
                 trDr,
                 prettify_time(prdt),
                 prettify_time(arrT),
+                arrT,
                 due_in,
                 time_since_update,
                 a.get("isApp"),
@@ -917,6 +919,7 @@ class TrainStation:
                 trDr,
                 prettify_time(prdt),
                 prettify_time(arrT),
+                arrT,
                 due_in,
                 time_since_update,
                 a.get("isApp"),
@@ -1105,14 +1108,18 @@ class StaticFeed:
         df = get_transfers()
         return df
 
-    def stop_times(self) -> pd.DataFrame:
+    def stop_times(self,*args) -> pd.DataFrame:
         """
         Returns dataframe of GTFS `stop_times.txt` file
         
         NOTE: Not 'real-time' data; intended for reference purposes
         """
-        df = get_stop_times()
-        return df
+        if len(args) != 0:
+            if args[0] == 'bus':
+                return get_bus_stop_times()
+            elif args[0] == 'train':
+                return get_train_stop_times()
+        return get_stop_times()
 
     def calendar_dates(self) -> pd.DataFrame:
         return get_calendar_dates()
@@ -1139,12 +1146,24 @@ class StaticFeed:
             update_bus_routes()
         df = get_bus_routes()
         return df
+    
+    def route_transfers(self) -> pd.DataFrame:
+        return get_route_transfers()
 
 class BusTracker:
     """
     # BusTracker API
 
     Interface with CTA's BusTrackerAPI to display busses, routes, and other information from the transit system
+
+    Endpoint Methods:
+    --------------------
+    - stops
+    - routes
+    - vehicles
+    - predictions
+    - directions
+    - patterns
     """
     def __init__(self):
         self.__stop_reference = get_stops()
@@ -1306,7 +1325,7 @@ class BusTracker:
                     row_data.append(p.get(col))
             data.append(row_data)
 
-        return pd.DataFrame(data=data,columns=PREDICTION_COLS.values()).sort_values(by=["vehicle_id","time_rem"],ascending=[True,True]).reset_index(drop=True)
+        return pd.DataFrame(data=data,columns=PREDICTION_COLS.values()).sort_values(by=["vehicle_id","predicted_time"],ascending=[True,True]).reset_index(drop=True)
 
     def directions(self,rt) -> list:
         params = {
@@ -1473,6 +1492,7 @@ class TrainTracker:
                 trDr,
                 prettify_time(prdt),
                 prettify_time(arrT),
+                arrT,
                 due_in,
                 time_since_update,
                 a.get("isApp"),
@@ -1943,7 +1963,7 @@ class CustomerAlerts:
 # ====================================================================================================
 # Other
 # ====================================================================================================
-class StopSearch():
+class StopSearch:
     def __init__(self):
         df = get_stops().rename(columns={"stop_lat":"lat","stop_lon":"lon"}).drop(columns=["map_id","stop_code","location_type"])
         self.__cta_stops = df.dropna(subset=['stop_id']).astype({'stop_id':'int','stop_desc':'str'})
@@ -1954,7 +1974,7 @@ class StopSearch():
         # self.__train_stops = df[df.map_id.notna()]
         # self.__bus_stops = df[df.map_id.isna()]
 
-    def find_stop(self,query,rtdir=None,hide_desc_col=False):
+    def find_stop(self,query,stop_type=None,rtdir=None,hide_desc_col=False):
         """
         Search for a CTA stop/station by name.
         """
@@ -2000,6 +2020,16 @@ class StopSearch():
             elif "east" in rtdir:
                 rtdir = 'e'
             df = df[df["rtdir"].str.lower()==rtdir]
+        
+        if stop_type is not None:
+            stop_type = stop_type.lower()
+            df = df.astype({'stop_id':'int'})
+            if stop_type == 'bus':
+                df = df[df['stop_id']<30000]
+            elif stop_type == 'train' or stop_type == 'rail' or stop_type == 'l':
+                df = df[df['stop_id']>29999]
+                
+        df = df.astype({'stop_id':'str'})
         if hide_desc_col is True:
             return df.drop(columns=["stop_desc"]).reset_index(drop=True)
         else:
@@ -2007,7 +2037,7 @@ class StopSearch():
 
     def closest_stops(self,*args,routes=None,directions=None,limit=3,stop_type=None,exclude_stops=None,**kwargs):
         """
-        Retrieve the closest bus and/or train stops near a given location (by coordinates)
+        Retrieve the closest CTA bus and/or train stops near a given location (by coordinates)
 
         Required Positional Args:
         -------------------------
@@ -2208,8 +2238,6 @@ class StopSearch():
         else:
             return pd.concat([bus_stop_df,train_stop_df]).reset_index(drop=True)
 
-        
-
     def lookup(self,query):
         """
         Retrieve details of a location by query
@@ -2271,11 +2299,20 @@ class RouteSketch:
 # Functions
 # ====================================================================================================
 def cta_stops():
+    """
+    Get a dataframe of all bus stops & train stations/platforms serviced by the CTA
+    """
     return get_stops()
+
+def cta_trips():
+    """
+    Get a dataframe of all trips performed by CTA vehicles (bus & L train) 
+    """
+    return get_trips()
 
 def route_transfers() -> pd.DataFrame:
     """
-    Returns a dataframe of transfer details for each route & stop(/or station)
+    Returns a dataframe of transfer details for each route & stop/station)
 
     (Retrieved from `CTA_STOP_XFERS.txt` file provided by CTA in static feed directory)
     
@@ -2441,32 +2478,39 @@ def bus_route_stops(route,direction) -> pd.DataFrame:
     """
     df = get_bus_route_stops(route,direction)
     return df
-    
+
+def bus_stop_times() -> pd.DataFrame:
+    return get_bus_stop_times()
+
 def train_stations(hide_desc_col=True) -> pd.DataFrame:
-    """Returns dataframe of train stations provided by the City of Chicago's transit database via JSON url"""
+    """
+    Returns dataframe of train stations provided by the City of Chicago's transit database via JSON url
+
+    NOTE: This data differs slightly from the Static Feed data
+    """
     df = get_train_stations()
     if hide_desc_col is True:
         return df.drop(columns=["station_descriptive_name"])
     else:
         return df
 
-def train_arrivals(self,stpid_or_mapid=None) -> pd.DataFrame:
+def train_arrivals(*args,**kwargs) -> pd.DataFrame:
     """
-    (Not properly configured yet)
     Returns dataframe estimated arrival times & locations (given a station/stop) for vehicles serviced by the Line.\n
     (Method will auto detect if the entered param value is a stop id or a station id)
     
-    Required Param:
+    Required Args:
     ---------------
     - `stp_or_map_id`: Valid 'stpid' or 'mapid'
     """
+    stpid_or_mapid = args[0]
+
     if dt.datetime.now().time() < dt.time(16,0,0):
         key = CTA_TRAIN_API_KEY
     else:
         key = ALT_TRAIN_API_KEY
     params = {
         "key":key,
-        "rt":self.line_ref,
         "outputType":"JSON"}
     if str(stpid_or_mapid)[0] == "3":
         params["stpid"] = stpid_or_mapid
@@ -2476,6 +2520,11 @@ def train_arrivals(self,stpid_or_mapid=None) -> pd.DataFrame:
         print("Error: Ensure that you have entered a valid 'stpid' or 'mapid'")
         return None
 
+    for possible_key in ("line","route","rt","route_id","line_ref"):
+        if possible_key in kwargs.keys():
+            params['rt'] = kwargs[possible_key]
+            break
+            
     url = f"{CTA_TRAIN_BASE}/ttarrivals.aspx?"
     response = requests.get(url,params=params)
 
@@ -2496,7 +2545,7 @@ def train_arrivals(self,stpid_or_mapid=None) -> pd.DataFrame:
 
         # Col-value definitions:
         stop_id = a.get("stpId")
-        stop_name = self.__get_stop_name(stop_id)
+        stop_name = get_stop_name(stop_id)
         map_id = a.get("staId")
         station_name = a.get("staNm")
         station_desc = a.get("stpDe")
@@ -2531,10 +2580,14 @@ def train_arrivals(self,stpid_or_mapid=None) -> pd.DataFrame:
     df = pd.DataFrame(data=data,columns=L_ARRIVALS_COLS)
     return df
 
-def train_positions(self) -> pd.DataFrame:
+def train_positions(rt) -> pd.DataFrame:
     """
     (Not properly configured yet)
-    Gets the current position of every vehicle for this CTA Line
+    Gets the current position of every vehicle for this CTA Line's Route
+
+    Required Args:
+    ---------------
+    - 'rt': a valid route identifier
     """
     if dt.datetime.now().time() < dt.time(16,0,0):
         key = CTA_TRAIN_API_KEY
@@ -2542,7 +2595,7 @@ def train_positions(self) -> pd.DataFrame:
         key = ALT_TRAIN_API_KEY
     params = {
     "key":key,
-    "rt":self.line_ref,
+    "rt":rt,
     "outputType":"JSON"}
     url = f"{CTA_TRAIN_BASE}/ttpositions.aspx?"
     response = requests.get(url,params=params)
@@ -2592,7 +2645,7 @@ def train_positions(self) -> pd.DataFrame:
     df = pd.DataFrame(data=data,columns=L_POSITIONS_COLS)
     return df
 
-def train_follow(self,rn,hide_desc_col=True) -> pd.DataFrame:
+def train_follow(rn,hide_desc_col=True) -> pd.DataFrame:
     """
     (Not properly configured yet)
     Returns a dataframe of a line's arrival/location data for a specific run_number (rn)
@@ -2621,7 +2674,7 @@ def train_follow(self,rn,hide_desc_col=True) -> pd.DataFrame:
     data = []
     for e in ctatt["eta"]:
         stpId = e.get("stpId")
-        coords = self.__get_stop_coords(stpId)
+        coords = get_stop_coords(stpId)
         stpLat = coords[0]
         stpLon = coords[1]
         prdt = e.get("prdt")
@@ -2661,7 +2714,8 @@ def train_follow(self,rn,hide_desc_col=True) -> pd.DataFrame:
         return df.drop(columns=["service_desc"])
     return df
 
-
+def train_stop_times() -> pd.DataFrame:
+    return get_train_stop_times()
 
 
 

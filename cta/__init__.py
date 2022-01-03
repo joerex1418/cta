@@ -50,6 +50,7 @@ from .cta import TransitData
 from .cta import RouteSketch
 
 from .cta import cta_stops
+from .cta import cta_trips
 from .cta import stop_search
 from .cta import route_transfers
 from .cta import bus_routes
@@ -58,10 +59,12 @@ from .cta import bus_vehicles
 from .cta import bus_directions
 from .cta import bus_predictions
 from .cta import bus_route_stops
+from .cta import bus_stop_times
 from .cta import train_stations
 from .cta import train_arrivals
 from .cta import train_positions
 from .cta import train_follow
+from .cta import train_stop_times
 
 from .cta import update_static_feed
 from .cta import check_feed

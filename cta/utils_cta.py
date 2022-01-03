@@ -25,16 +25,19 @@ TRAIN_STATIONS_CSV_PATH = os.path.join(os.path.dirname(__file__), 'cta_train_sta
 BUS_ROUTES_CSV_PATH = os.path.join(os.path.dirname(__file__), 'cta_bus_routes.csv')
 UPDATED_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/updated.txt')
 GTFS_DATA_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/')
+BUS_STOP_TIMES_CSV_PATH = os.path.join(os.path.dirname(__file__), 'bus_stop_times.csv')
+TRAIN_STOP_TIMES_CSV_PATH = os.path.join(os.path.dirname(__file__), 'train_stop_times.csv')
 
 # 0-29999       = Bus stops
 # 30000-39999   = Train stops
 # 40000-49999   = Train stations (parent stops)
 
-def stop_search(query,rtdir=None,hide_desc_col=False) -> pd.Series | pd.DataFrame:
+def stop_search(query,rtdir=None,stop_type='all',hide_desc_col=False) -> pd.Series | pd.DataFrame:
     """
     Search for a CTA stop/station by name.
     """
     df = get_stops().astype('str')
+    
     q = query.lower().replace("and","&")
     if "&" in q:
         q_list = str(q).split("&")
@@ -64,6 +67,13 @@ def stop_search(query,rtdir=None,hide_desc_col=False) -> pd.Series | pd.DataFram
         else:
             route_dirs.append("-")
     df.insert(4,"rtdir",route_dirs)
+    if stop_type != 'all':
+        df = df.astype({'stop_id':'int'})
+        if stop_type == 'bus':
+            df = df[df['stop_id']<30000]
+        elif stop_type == 'train':
+            df = df[df['stop_id']>=30000]
+
     if rtdir is not None:
         rtdir = rtdir.lower()
         if "north" in rtdir:
@@ -243,6 +253,12 @@ def get_bus_routes():
     # df = pd.read_csv(os.path.abspath("./cta/cta/cta_bus_routes.csv"),index_col=False)
     return df
 
+def get_bus_stop_times():
+    return pd.read_csv(BUS_STOP_TIMES_CSV_PATH,index_col=False)
+
+def get_train_stop_times():
+    return pd.read_csv(TRAIN_STOP_TIMES_CSV_PATH,index_col=False)
+
 def update_bus_routes():
     params = {"format":"json"}
     key = CTA_BUS_API_KEY if dt.datetime.now().time() < dt.time(16,0,0) else ALT_BUS_API_KEY
@@ -303,8 +319,14 @@ def update_static_feed(force_update=False):
                 txtfile.write(timestamp)
             # with open(os.path.abspath("./cta/cta/cta_google_transit/updated.txt"),"w+") as txtfile:
             #     txtfile.write(timestamp)
+            df = get_stop_times().astype({'stop_id':'int'})
+            bus = df[df['stop_id']<30000]
+            train = df[df['stop_id']>=30000]
+            bus.to_csv(BUS_STOP_TIMES_CSV_PATH,index=False)
+            train.to_csv(TRAIN_STOP_TIMES_CSV_PATH,index=False)
         else:
             print("CTA static feed is already up to date")
+        
 
 def check_feed():
     """
@@ -336,6 +358,12 @@ def update_all():
 def get_parent_stop():
     pass
 
+def get_stop_name(stpid):
+    df = get_stops()
+    station_row = df[df["stop_id"]==str(stpid)]
+    return station_row.stop_name.item()
 
-
-
+def get_stop_coords(stpid):
+    df = get_stops()
+    station_row = df[df["stop_id"]==stpid].iloc[0]
+    return (str(station_row.lat.item()),str(station_row.lon.item()))
