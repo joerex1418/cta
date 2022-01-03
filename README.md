@@ -1,30 +1,41 @@
-# cta
+# PyCTA
 A Python wrapper for interacting with the CTA Transit Feeds:  
 
-**BusTrackerAPI**  
-**TrainTrackerAPI**  
-**CustomerAlertsAPI**
+- **BusTrackerAPI**  
+- **TrainTrackerAPI**  
+- **CustomerAlertsAPI**
+<br>
 
-
-
-## Getting Started
+## Quick Start
 ```python
 import cta
 
 # API Wrappers
-busapi = cta.BusTracker()
-trainapi = cta.TrainTracker()
-
-# Wrappers for Bus Objects
+bt = cta.BusTracker()
+tt = cta.TrainTracker()
 ```
 
-## BusTracker Objects
-- BusRoute
-- BusStop
-- Bus
+## Stop Search / Reference
+```python
+ss = cta.StopSearch()
 
+# Search for stops with "fullerton" in stop name
+ss.find_stop('fullerton')
 
-## TrainTracker Objects
-- TrainRoute
-- TrainStation
-- Train
+# Same search but only return train stops (stations)
+ss.find_stop('fullerton',stop_type='train')
+
+# Search for the bus stop at the intersection of Clark & Diversey
+ss.find_stop('clark and diversey',stop_type='bus')
+```
+
+## Bus Tracking
+```python
+# Arrival Predictions by stop ID
+
+bt.predictions(stpid="1836")
+
+# Arrival Predictions for a single vehicle (vehicle ID).
+
+bt.predictions(stpid="1836")
+```
