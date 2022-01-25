@@ -12,7 +12,6 @@ from .utils import locate
 from .utils import get_coordinates
 from .utils import geolocate
 from .utils import prettify_time
-from .utils import get_distance
 from .utils import ISO_FMT_ALT
 
 from .utils_cta import *
@@ -1108,18 +1107,20 @@ class StaticFeed:
         df = get_transfers()
         return df
 
-    def stop_times(self,*args) -> pd.DataFrame:
+    def stop_times(self,*args,rw='pandas') -> pd.DataFrame:
         """
         Returns dataframe of GTFS `stop_times.txt` file
+
+        - 'rw': ("read_with") -> read with either 'polars' or 'pandas'. Default is 'pandas'
         
         NOTE: Not 'real-time' data; intended for reference purposes
         """
         if len(args) != 0:
             if args[0] == 'bus':
-                return get_bus_stop_times()
+                return get_bus_stop_times(rw)
             elif args[0] == 'train':
                 return get_train_stop_times()
-        return get_stop_times()
+        return get_stop_times(rw)
 
     def calendar_dates(self) -> pd.DataFrame:
         return get_calendar_dates()
@@ -1316,7 +1317,15 @@ class BusTracker:
                 if col != "tmstmp":
                     if col == "prdctdn":
                         rem = p.get(col)
-                        row_data.append(f"{rem} mins" if rem!="DUE" else f"1 min")
+                        if rem == "DUE":
+                            rem = rem
+                        elif "DLY" in rem:
+                            rem = rem
+                        else:
+                            rem = rem
+                        row_data.append(rem)
+
+                        # row_data.append(f"{rem} mins" if rem!="DUE" else f"1 min")
                     elif col == "typ":
                         row_data.append(PRD_TYPES[p.get(col)])
                     else:
@@ -1324,8 +1333,12 @@ class BusTracker:
                 else:
                     row_data.append(p.get(col))
             data.append(row_data)
-
-        return pd.DataFrame(data=data,columns=PREDICTION_COLS.values()).sort_values(by=["vehicle_id","predicted_time"],ascending=[True,True]).reset_index(drop=True)
+        
+        df = pd.DataFrame(data=data,columns=PREDICTION_COLS.values()) #.sort_values(by="vehicle_id",ascending=True).reset_index(drop=True)
+        df['timestamp'] = pd.to_datetime(df['timestamp'],format=r"%Y%m%d %H:%M")
+        df['predicted_time'] = pd.to_datetime(df['predicted_time'],format=r"%Y%m%d %H:%M")
+        df.sort_values(by="predicted_time",inplace=True)
+        return df
 
     def directions(self,rt) -> list:
         params = {
@@ -1367,7 +1380,7 @@ class BusTracker:
         - latitude (required)
         - longitude (required)
         """
-        return self.__sort_by_shortest_distance(latitude,longitude,self.__stops).head(limit).reset_index(drop=True)
+        return self.__sort_by_shortest_distance(latitude,longitude,self.__stop_reference).head(limit).reset_index(drop=True)
 
     def __get_patterns(self,pid=None,rt=None):
         if dt.datetime.now().time() < dt.time(16,0,0):
@@ -1464,7 +1477,7 @@ class TrainTracker:
             arrT = a.get("arrT")
             arrT_obj = dt.datetime.strptime(arrT,ISO_FMT_ALT)
             due_in = int((arrT_obj - prdt_obj).seconds / 60)
-            due_in = 'Due' if due_in == 1 else f'{due_in} mins'
+            due_in = 'DUE' if due_in == 1 else f'{due_in}'
             time_since_update = timestamp_obj - prdt_obj
             time_since_update = f'{time_since_update.seconds} seconds ago'
 
@@ -1504,6 +1517,9 @@ class TrainTracker:
                 a.get("lon"),
                 a.get("heading")])
         df = pd.DataFrame(data=data,columns=L_ARRIVALS_COLS)
+        df['eta_timestamp'] = pd.to_datetime(df['eta_timestamp'])
+        df['vehicle_id'] = df['run_num']
+        df.sort_values(by="eta_timestamp")
         if hide_desc_col is True:
             return df.drop(columns=["station_desc"])
         return df
@@ -1550,10 +1566,12 @@ class TrainTracker:
             prdt_obj = dt.datetime.strptime(prdt,ISO_FMT_ALT)
             arrT = e.get("arrT")
             arrT_obj = dt.datetime.strptime(arrT,ISO_FMT_ALT)
+            arrT_timestamp = pd.to_datetime(timestamp)
             due_in = int((arrT_obj - prdt_obj).seconds / 60)
-            due_in = 'Due' if due_in == 1 else f'{due_in} mins'
+            due_in = 'DUE' if due_in == 1 else f'{due_in}'
             time_since_update = timestamp_obj - prdt_obj
             time_since_update = f'{time_since_update.seconds} seconds ago'
+            
             data.append([
                 stpId,
                 stpLat,
@@ -1568,6 +1586,7 @@ class TrainTracker:
                 e.get("trDr"),
                 prettify_time(prdt),
                 prettify_time(arrT),
+                arrT_timestamp,
                 due_in,
                 time_since_update,
                 e.get("isApp"),
@@ -1579,6 +1598,7 @@ class TrainTracker:
                 lon,
                 heading])
         df = pd.DataFrame(data=data,columns=L_FOLLOW_COLS)
+        df.sort_values(by="eta_timestamp",inplace=True)
         if hide_desc_col is True:
             return df.drop(columns=["service_desc"])
         return df
@@ -2049,8 +2069,8 @@ class StopSearch:
         Optional Parameters:
         -------------------------
         - 'routes':
-        - 'directions':
-        - 'limit':
+        - 'directions': ('list' | 'tuple' | 'str' | 'dict')
+        - 'limit': ('list' | 'tuple' | 'str' | 'dict')
         - 'stop_type':
         - 'exclude_stops':
         """
@@ -2226,9 +2246,18 @@ class StopSearch:
         if traindirs is not None:
             train_stop_df = train_stop_df[train_stop_df["dir"].isin(traindirs)]
 
-        bus_stop_df = bus_stop_df.head(bus_limit)
+        # If the limit values are 'NoneType' or if values == '0', all stops will be returned
+        # ---- Otherwise, only the first "limit" rows will be returned
+        if bus_limit is None or bus_limit == "0" or bus_limit == "all":
+            pass
+        else:
+            bus_stop_df = bus_stop_df.head(int(bus_limit))
         bus_stop_df = bus_stop_df.astype('str')
-        train_stop_df = train_stop_df.head(train_limit)
+
+        if train_limit is None or train_limit == "0" or train_limit == "all":
+            pass
+        else:
+            train_stop_df = train_stop_df.head(int(train_limit))
         train_stop_df = train_stop_df.astype('str')
         
         if len(train_stop_df) == 0 or stop_type == "bus":
@@ -2298,17 +2327,41 @@ class RouteSketch:
 # ====================================================================================================
 # Functions
 # ====================================================================================================
-def cta_stops():
+def stops():
     """
     Get a dataframe of all bus stops & train stations/platforms serviced by the CTA
     """
     return get_stops()
 
-def cta_trips():
+def trips():
     """
     Get a dataframe of all trips performed by CTA vehicles (bus & L train) 
     """
     return get_trips()
+
+def routes():
+    """
+    Get dataframe of all CTA routes
+    """
+    return get_routes()
+
+def shapes(read_with='polars'):
+    return get_shapes(read_with)
+
+def calendar():
+    return get_calendar()
+
+def calendar_dates():
+    """
+    Indicates whether service is available on the date specified in the date field. Valid options are:
+
+    Per GTFS Static Guidlines:
+
+    - "exception_type" values:
+        - 1 - Service has been ADDED for the specified date.
+        - 2 - Service has been REMOVED for the specified date.
+    """
+    return get_calendar_dates()
 
 def route_transfers() -> pd.DataFrame:
     """
@@ -2319,6 +2372,13 @@ def route_transfers() -> pd.DataFrame:
     NOTE: Not 'real-time' data; intended for reference purposes
     """
     return get_route_transfers()
+
+def bus_trips():
+    """
+    Get a dataframe of all BUS trips
+    """
+    ts = trips().astype('str')
+    return ts[~ts['schd_trip_id'].str.contains('R')].reset_index(drop=True)
 
 def bus_routes(update_data=False) -> pd.DataFrame:
     """Retrieves locally saved bus route data from CTA Bus Tracker API
@@ -2479,8 +2539,25 @@ def bus_route_stops(route,direction) -> pd.DataFrame:
     df = get_bus_route_stops(route,direction)
     return df
 
-def bus_stop_times() -> pd.DataFrame:
-    return get_bus_stop_times()
+def bus_route_directions() -> pd.DataFrame:
+    return get_bus_route_dirs()
+
+def bus_stop_times(read_with='polars') -> pd.DataFrame:
+    """
+    Get stop times data frame for buses only.
+
+    Params:
+    -------
+    - read_with: set to either 'polars' or 'pandas'
+    """
+    return get_bus_stop_times(read_with=read_with)
+
+def train_trips():
+    """
+    Get a dataframe of all CTA TRAIN trips
+    """
+    ts = trips().astype('str')
+    return ts[ts['schd_trip_id'].str.contains('R')].reset_index(drop=True)
 
 def train_stations(hide_desc_col=True) -> pd.DataFrame:
     """
@@ -2717,6 +2794,465 @@ def train_follow(rn,hide_desc_col=True) -> pd.DataFrame:
 def train_stop_times() -> pd.DataFrame:
     return get_train_stop_times()
 
+def services_by_date(date=None,include_all_active=False,**kwargs):
+    """
+    Get active services for a specific date.  Default value is the current date 
+
+    Params:
+    -------
+    - 'date' (str | datetime): date to specify. String format = `YYYY-mm-dd`
+    - 'include_all_active' (bool, Default: FALSE): Set TRUE to return all active services and disregard the day of week
+        - shorthand key: `iaa`
+    """
+    if kwargs.get("iaa",None) is not None:
+        include_all_active = kwargs["iaa"]
+
+    if date is None:
+        tod = dt.date.today()
+    elif type(date) is str:
+        tod = dt.datetime.strptime(date,r"%Y-%m-%d").date()
+    elif type(date) is dt.datetime:
+        tod = date.date()
+    elif type(date) is dt.date:
+        tod = date
+    else:
+        print("'date' param must be string or datetime object")
+        return None
+
+    dow = tod.strftime("%A") # the day of the week
+    c = calendar()
+    relevant_services = []
+    tod = dt.date.today()
+
+    for idx in range(len(c)):
+        row = c.iloc[idx]
+        sdate = dt.datetime.strptime(row.start_date,r"%Y%m%d").date()
+        edate = dt.datetime.strptime(row.end_date,r"%Y%m%d").date()
+        if sdate <= tod <= edate:
+            relevant_services.append(row)
+
+    df = pd.DataFrame(relevant_services)
+
+    if include_all_active is False:
+        df = df[df[dow.lower()]=="1"]
+
+    return df.sort_values(by='service_id').reset_index(drop=True)
+
+def service_exceptions(service_id):
+    """
+    Exceptions for a specific service_id in date ranges referenced in 'cta.calendar()' (e.g. Such as a holiday when a Sunday schedule is operated)
+    """
+    service_id = str(service_id)
+    cd = calendar_dates()
+    cd_for_service = cd[cd["service_id"]==service_id]
+    if ~cd_for_service.empty:
+        return cd_for_service
+    else:
+        return None
+
+def trips_for(route_id=None,direction=None,date=None) -> pd.DataFrame:
+    """
+    Get all scheduled trips for a specific date.  Default is the current date 
+
+    - 'date' (str | datetime): date to query. String format = `YYYY-mm-dd`
+    """
+    
+
+    if date is None:
+        date = dt.date.today()
+    elif type(date) is str:
+        date = dt.datetime.strptime(date,r"%Y-%m-%d").date()
+    elif type(date) is dt.datetime:
+        date = date.date()
+    elif type(date) is dt.date:
+        date = date
+    else:
+        print("'date' param must be string or datetime object")
+        return None
+    date_str = dt.date.strftime(date,r"%Y%m%d")
+
+    serv_ids = services_by_date(date)["service_id"]
+    serv_exc = calendar_dates()
+    serv_exc = serv_exc[serv_exc["date"]==date_str]
+    excluded_ids = set(serv_exc["service_id"])
+
+    trips_df = trips()
+
+    trips_df = trips_df[(trips_df['service_id'].isin(serv_ids)) & (~trips_df["service_id"].isin(excluded_ids))]
+
+    route_id = str(route_id)
+    if LINES.get(route_id,None) is not None:
+        route_id = route_id.lower()
+        route_id = LINES[route_id]
+
+    if trips_df is not None:
+        trips_df = trips_df[trips_df["route_id"]==route_id]
+    
 
 
+    if direction is not None:
+        direction = direction[0].lower()
+        if direction == 'n':
+            direction = 'North'
+        elif direction == 's':
+            direction = 'South'
+        elif direction == 'e':
+            direction = 'East'
+        elif direction == 'w':
+            direction = 'West'
+        trips_df = trips_df[trips_df["direction"]==direction]
+        
+    return trips_df.reset_index(drop=True)
+
+def routes_by_stop(stop_id) -> list:
+    """
+    Get a list of routes serviced by the stop
+    """
+    df = pd.read_csv(TRAIN_STATIONS_CSV_PATH,dtype={'stop_id':'str','map_id':'str'},usecols=['stop_id','map_id','red','blue','green','brown','purple','purple_exp','yellow','pink','orange'],index_col=False)
+    if int(stop_id) >= 30000:
+        # FOR TRAIN STOP -------------------------------------------------------------------------
+        serviced_lines = []
+        if str(stop_id)[0] == '3':
+            # FOR SPECIFIC PLATFORM OF A PARENT STATION
+            # ['red','blue','green','brown','purple','purple_exp','yellow','pink','orange']
+            df = df[df['stop_id']==str(stop_id)]
+            for line in df.columns:
+                # print(df.iloc[0][line])
+                # print(type(df.iloc[0][line]))
+                # print('-----------------\n')
+                if df.iloc[0][line] == True:
+                    serviced_lines.append(line)
+            return list(set(serviced_lines))
+
+        else:
+            # FOR PARENT STOP
+            df = df[df['map_id']==str(stop_id)]
+            for idx in range(len(df)):
+                row = df.iloc[idx]
+                for line in df.columns:
+                    if row[line] == True:
+                        serviced_lines.append(line)
+            return list(set(serviced_lines))
+
+    else:
+        # FOR BUS STOP ---------------------------------------------------------------------------
+        df = pol.read_csv(ROUTE_TRANSFERS_CSV_PATH,dtypes={'rt':str}).filter(
+            (pol.col('stop_id')==str(stop_id))
+        )
+        return list(set(df['rt']))
+
+def stop_schedule(stop_id=None,date=None,upcoming_only=False,**kwargs):
+    """
+    Get scheduled stop times for a specific stop
+
+    - 'date' (str | datetime): date to query. (Defaults to the current date if not specified)
+        - Format for strings = `YYYY-mm-dd`
+    """
+    trip_routes = {}
+    full_triplist = []
+    triplists = []
+    if int(stop_id) < 30000:
+        serviced_routes = routes_by_stop(str(stop_id))
+        
+        for rt in serviced_routes:
+            trip_df = trips_for(rt,date)
+
+            triplist = list(set(trip_df["trip_id"]))
+            triplist = list(map(int,triplist))
+            triplists.append(triplist)
+            for trp in triplist:
+                trip_routes[str(trp)] = rt
+
+        for tlist in triplists:
+            for trp in tlist:
+                full_triplist.append(trp)
+
+
+        st = pol.scan_csv(BUS_STOP_TIMES_CSV_PATH).filter(
+                (pol.col('trip_id').is_in(full_triplist)) & 
+                (pol.col('stop_id') == int(stop_id))
+                ).collect().to_pandas()
+
+        arrTimes = st['arrival_time']
+        trps = st['trip_id']
+        tdelt_list = []
+        route_list = []
+        for tm in arrTimes:
+            tdelt = dt.timedelta(hours=int(tm[:2]),minutes=int(tm[3:5]),seconds=int(tm[-2:]))
+            tdelt_list.append(tdelt)
+        for trp in trps:
+            route_list.append(trip_routes[str(trp)])
+        
+        st.insert(6,'stopwatch',tdelt_list)
+        st.insert(0,'route_id',route_list)
+
+
+        # sorted_dfs = []
+        # for trp in triplist:
+        #     df = st[st['trip_id']==int(trp)]
+        #     arrTime = df.iloc[0]['arrival_time']
+        return st.sort_values(by='stopwatch')
+    
+    elif int(stop_id) >= 30000:
+        serviced_routes = routes_by_stop(str(stop_id))
+        
+        for rt in serviced_routes:
+            trip_df = trips_for(rt,date)
+
+            triplist = list(set(trip_df["trip_id"]))
+            triplist = list(map(int,triplist))
+            triplists.append(triplist)
+            for trp in triplist:
+                trip_routes[str(trp)] = rt
+                
+        for tlist in triplists:
+            for trp in tlist:
+                full_triplist.append(trp)
+
+        full_triplist = list(map(str,full_triplist))
+        if str(stop_id)[0] != "4":
+            st = pol.scan_csv(TRAIN_STOP_TIMES_CSV_PATH,dtypes={'trip_id':str}).filter(
+                    (pol.col('trip_id').is_in(full_triplist)) & 
+                    (pol.col('stop_id') == int(stop_id))
+                    ).collect().to_pandas()
+        else:
+            stops_df = pd.read_csv(TRAIN_STATIONS_CSV_PATH,usecols=['stop_id','map_id'])
+            stop_list = list(stops_df[stops_df['map_id']==int(stop_id)]['stop_id'])
+
+            st = pol.scan_csv(TRAIN_STOP_TIMES_CSV_PATH,dtypes={'trip_id':str}).filter(
+                    (pol.col('trip_id').is_in(full_triplist)) & 
+                    (pol.col('stop_id').is_in(stop_list))
+                    ).collect().to_pandas()
+
+        arrTimes = st['arrival_time']
+        trps = st['trip_id']
+        tdelt_list = []
+        route_list = []
+        for tm in arrTimes:
+            tdelt = dt.timedelta(hours=int(tm[:2]),minutes=int(tm[3:5]),seconds=int(tm[-2:]))
+            tdelt_list.append(tdelt)
+        for trp in trps:
+            route_list.append(trip_routes[str(trp)])
+        
+        st.insert(6,'stopwatch',tdelt_list)
+        st.insert(0,'route_id',route_list)
+
+
+        # sorted_dfs = []
+        # for trp in triplist:
+        #     df = st[st['trip_id']==int(trp)]
+        #     arrTime = df.iloc[0]['arrival_time']
+        return st.sort_values(by='stopwatch')
+
+
+def shapes_by_trips(trip_ids):
+    """
+    Get shape data for single trip or a list of trips
+
+    - 'trips': (str | int | _Iterable)
+    """
+    df = shapes()
+    if type(trip_ids) is str or type(trip_ids) is int:
+        trip_ids = str(trip_ids)
+        
+        df = df.filter(
+            (pol.col('shape_id') == trip_ids)
+        )
+        return df
+    elif type(trip_ids) is list or type(trip_ids) is tuple:
+        trip_ids = list(trip_ids)
+        trip_ids = list(map(str,trip_ids))
+        df = df.filter(
+            (pol.col('shape_id').is_in(trip_ids))
+        )
+        return df
+    else:
+        return None
+
+def shapes_by_route(route_id,direction,date=None):
+    """
+    Get shape data for specific route, direction, and date
+
+    Date defaults to today if not specified
+    """
+    route_id = str(route_id)
+    trips_df = trips_for(date,route_id,direction)
+    shapes_for_route = list(set(trips_df['shape_id']))
+    shapes_df = shapes()
+    direction = direction[0].lower()
+    
+    return shapes_df.filter(pol.col('shape_id').is_in(shapes_for_route))
+
+def route_colors(route_id) -> str:
+    """
+    Get the hex color codes for a specific route
+
+    returns list -> [<ROUTE_COLOR>,<TEXT_COLOR>]
+    """
+    df = get_routes().set_index('route_id',drop=True)
+    if route_id.lower() in LINES.keys():
+        # isTrain = True
+        route_id = LINES[route_id.lower()]
+        if route_id == "Pexp":
+            route_id = "P"
+
+    route_row = df.loc[route_id]
+    colors = [route_row['route_color'],route_row['route_text_color']]
+    return colors
+
+def route_data(route_id,direction=None,datetime=None,**kwargs) -> dict:
+    """
+    Get information for a route at a given time such as stop times, in-progress trips, and route shapes
+
+    Returns a dictionary -> `{'shapes':<SHAPES_DF>,'stop_times':<STOP_TIMES_DF>}`
+
+    NOTE: -- THIS FUNCTION IS ONLY CONFIGURED TO RETRIEVE DATA FOR BUS ROUTES AT THIS TIME. 
+                IT WILL BE CONFIGURED ANOTHER TIME
+
+    Required:
+    ---------
+    - 'route_id'
+
+    Conditionally Required:
+    -----------------------
+    - 'direction' (datetime obj): required if "route_id" is for a bus route
+    
+    Other:
+    ------
+    - 'date': specify a custom date to query (current date if None is specified)
+    """
+    # USER INPUTS =================================================================================
+
+    if route_id not in LINES.keys():
+        forTrain = False
+        if direction is not None:
+            direction = direction
+        else:
+            print("ERROR: 'direction' parameter is required when querying a bus route")
+            return None
+    else:
+        forTrain = True
+        route_id = LINES[route_id.lower()]
+        if route_id == "Pexp":
+            route_id = "P"
+
+    qdt = datetime
+    if qdt is None:
+        qdt = dt.datetime.today()
+
+    qdate = qdt.date()
+    qtime = qdt.time()
+
+    # USER INPUTS =================================================================================
+
+    trps = trips_for(date=qdate,route_id=route_id,direction=direction)
+    triplist = list((trps['trip_id']))
+
+    if forTrain is False:
+        st = pol.scan_csv(BUS_STOP_TIMES_CSV_PATH).filter(
+            (pol.col('trip_id').is_in(list(map(int,triplist))))
+        ).collect()
+    else:
+        st = pol.read_csv(TRAIN_STOP_TIMES_CSV_PATH,dtypes={'trip_id':str})
+
+    st = st.filter(pol.col('trip_id').is_in(triplist))
+
+    st_dfs = []
+    curr_trips = []
+
+    # error_indexes = []
+    for trip_id in triplist:
+        onetrip = st.filter(pol.col("trip_id") == trip_id).sort('stop_sequence')
+        onetrip_shape = onetrip.shape # gets number of rows
+
+        first_row = onetrip.row(1)
+        last_row = onetrip.row(onetrip_shape[0] - 1)
+        
+        start_time = first_row[1]
+        end_time = last_row[1]
+
+        # parse times
+        try:
+            # start_time = time_since_midnight(start_time)
+            # end_time = time_since_midnight(end_time)
+
+            # converting to datetime objects to allow comparison
+            #       - base date will be the same for all of them and can really
+            #         be any value as long as they're all the same
+
+            # qdt_based = dt.datetime.combine(base_date,qtime)
+            # start_time = dt.datetime.combine(base_date,start_time)
+            # end_time = dt.datetime.combine(base_date,end_time)
+            dt.timedelta()
+            since_mnStart = dt.timedelta(
+                hours=int(start_time[:2]),
+                minutes=int(start_time[3:5]),
+                seconds=int(start_time[-2:]))
+
+            since_mnEnd = dt.timedelta(
+                hours=int(end_time[:2]),
+                minutes=int(end_time[3:5]),
+                seconds=int(end_time[-2:]))
+
+            since_mnQTime = dt.timedelta(
+                hours=qtime.hour,
+                minutes=qtime.minute,
+                seconds=qtime.second)
+
+
+            if since_mnStart <= since_mnQTime <= since_mnEnd:
+                st_dfs.append(onetrip)
+                curr_trips.append(str(trip_id))
+
+            # if start_time <= qdt_based <= end_time:
+            #     st_dfs.append(onetrip)
+            #     curr_trips.append(str(trip_id))
+
+        except Exception as e:
+            print(e)
+            # error_indexes.append(idx)
+
+    # Resulting Stop Times DF
+    curr_st = pol.concat(st_dfs).to_pandas()
+
+    # Resulting Trips DF
+    res_trps = trps[trps["trip_id"].isin(curr_trips)]
+    shape_ids = list(set(res_trps['shape_id']))
+
+    return {
+        'shapes': pol.scan_csv(SHAPES_TXT_PATH,dtypes={'shape_id':str}).filter(
+            (pol.col('shape_id').is_in(shape_ids))
+        ).collect().to_pandas(),
+        'stop_times':curr_st}
+
+def update_bus_route_directions():
+    """
+    Update the the bus_route_directions data
+
+    NOTE: This should only need to be done once every few months (perhaps even less). Refrain from doing it too often as it makes over a hundred API calls to direction data. It could also take up to a minute to complete
+    """
+    bus_routes_df = StaticFeed().routes()
+
+    bus_routes = list(set(bus_routes_df[~(bus_routes_df["route_short_name"].isna())].route_id))
+    data = []
+    for rtid in bus_routes:
+        try:
+            dir_list = BusTracker().directions(rtid)
+            dir_list_string = ",".join(dir_list)
+            data.append([rtid,dir_list_string])
+        except:
+            pass
+    df = pd.DataFrame(data=data,columns=("route_id","directions"))
+    df.to_csv(BUS_ROUTE_DIRS_CSV_PATH,index=False)
+
+def update_all(update_bus_rt_dirs=False):
+    """
+    Update ALL static data with a single function.
+
+    Set 'update_bus_rt_dirs' to TRUE to update the the bus_route_directions data. (Default is FALSE)
+    NOTE: This should only need to be done once every few months (perhaps even less). Refrain from doing it too often as it makes over a hundred API calls to direction data. It could also take up to a minute to complete
+    """
+    update_all_util()
+    if update_bus_rt_dirs is True:
+        update_bus_route_directions()
 

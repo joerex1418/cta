@@ -1,11 +1,15 @@
 import os
 import lxml
 import zipfile
+from polars.io import scan_csv
 import requests
 import pandas as pd
+import polars as pol
 import datetime as dt
 from io import BytesIO
 from bs4 import BeautifulSoup as bs
+
+from .utils import get_distance
 
 from .constants import CTA_BUS_BASE
 from .constants import CTA_BUS_API_KEY
@@ -26,13 +30,15 @@ BUS_ROUTES_CSV_PATH = os.path.join(os.path.dirname(__file__), 'cta_bus_routes.cs
 UPDATED_TXT_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/updated.txt')
 GTFS_DATA_PATH = os.path.join(os.path.dirname(__file__), 'cta_google_transit/')
 BUS_STOP_TIMES_CSV_PATH = os.path.join(os.path.dirname(__file__), 'bus_stop_times.csv')
+BUS_STOP_TIMES_MIN_CSV_PATH = os.path.join(os.path.dirname(__file__), 'bus_stop_times_min.csv')
+BUS_ROUTE_DIRS_CSV_PATH = os.path.join(os.path.dirname(__file__), 'bus_route_directions.csv')
 TRAIN_STOP_TIMES_CSV_PATH = os.path.join(os.path.dirname(__file__), 'train_stop_times.csv')
 
 # 0-29999       = Bus stops
 # 30000-39999   = Train stops
 # 40000-49999   = Train stations (parent stops)
 
-def stop_search(query,rtdir=None,stop_type='all',hide_desc_col=False) -> pd.Series | pd.DataFrame:
+def stop_search(query,rtdir=None,stop_type='all',hide_desc_col=False):
     """
     Search for a CTA stop/station by name.
     """
@@ -157,8 +163,11 @@ def get_routes():
     # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/trips.txt"),index_col=False,dtype="str")
     return df
 
-def get_shapes():
-    df = pd.read_csv(SHAPES_TXT_PATH,index_col=False,dtype="str")
+def get_shapes(read_with='pandas'):
+    if read_with == 'polars':
+        df = pol.read_csv(SHAPES_TXT_PATH,dtypes={'shape_id':str})
+    elif read_with == 'pandas':
+        df = pd.read_csv(SHAPES_TXT_PATH,index_col=False,dtype="str")
     # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/transfers.txt"),index_col=False,dtype="str")
     return df
 
@@ -172,7 +181,17 @@ def get_transfers():
     # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/transfers.txt"),index_col=False,dtype="str")
     return df
 
-def get_stop_times():
+def get_stop_times(read_with='pandas',scan=False):
+    # polars
+    if read_with == 'polars':
+        if scan is False:
+            return pol.read_csv(STOP_TIMES_TXT_PATH)
+        else:
+            return pol.scan_csv(STOP_TIMES_TXT_PATH).collect()
+    # pandas
+    elif read_with == 'pandas':
+        return pd.read_csv(STOP_TIMES_TXT_PATH,index_col=False)
+
     df = pd.read_csv(STOP_TIMES_TXT_PATH,index_col=False,dtype="str")
     # df = pd.read_csv(os.path.abspath("./cta/cta/cta_google_transit/stop_times.txt"),index_col=False,dtype={"trip_id":"str","stop_id":"int","shape_dist_traveled":"int"})
     return df
@@ -253,10 +272,17 @@ def get_bus_routes():
     # df = pd.read_csv(os.path.abspath("./cta/cta/cta_bus_routes.csv"),index_col=False)
     return df
 
-def get_bus_stop_times():
-    return pd.read_csv(BUS_STOP_TIMES_CSV_PATH,index_col=False)
+def get_bus_stop_times(read_with='pandas',scan=False):
+    if read_with == 'polars':
+        if scan is False:
+            return pol.read_csv(BUS_STOP_TIMES_CSV_PATH)
+        else:
+            return pol.scan_csv(BUS_STOP_TIMES_CSV_PATH).collect()
+    # pandas
+    elif read_with == 'pandas':
+        return pd.read_csv(BUS_STOP_TIMES_CSV_PATH,index_col=False)
 
-def get_train_stop_times():
+def get_train_stop_times(read_with='pandas'):
     return pd.read_csv(TRAIN_STOP_TIMES_CSV_PATH,index_col=False)
 
 def update_bus_routes():
@@ -291,13 +317,15 @@ def get_bus_route_stops(route,direction):
     df = pd.DataFrame(data=data,columns=STOP_COLS.values())
     return df
 
+def get_bus_route_dirs():
+    df = pd.read_csv(BUS_ROUTE_DIRS_CSV_PATH,index_col=False)
+    return df
+
 def update_static_feed(force_update=False):
     """Retrieves updated zip file, extracts .txt files and saves to 'cta_google_transit' folder"""
     with requests.Session() as sesh:
         with open(UPDATED_TXT_PATH,"r") as txtfile:
             last_time_downloaded = txtfile.read()
-        # with open(os.path.abspath("./cta/cta/cta_google_transit/updated.txt"),"r") as txtfile:
-        #     last_time_downloaded = txtfile.read()
 
         feed_url = "https://www.transitchicago.com/downloads/sch_data/"
         feed_response = sesh.get(feed_url)
@@ -320,14 +348,15 @@ def update_static_feed(force_update=False):
             # with open(os.path.abspath("./cta/cta/cta_google_transit/updated.txt"),"w+") as txtfile:
             #     txtfile.write(timestamp)
             df = get_stop_times().astype({'stop_id':'int'})
+            df = df.drop(columns=['departure_time','pickup_type'])
             bus = df[df['stop_id']<30000]
             train = df[df['stop_id']>=30000]
             bus.to_csv(BUS_STOP_TIMES_CSV_PATH,index=False)
             train.to_csv(TRAIN_STOP_TIMES_CSV_PATH,index=False)
+            df.astype({"trip_id":'str'}).to_csv(STOP_TIMES_TXT_PATH,index=False)
         else:
             print("CTA static feed is already up to date")
         
-
 def check_feed():
     """
     Fetches the CTA's GTFS transit feed directory to check the last time the feed was updated
@@ -346,17 +375,21 @@ def last_feed_update():
     """Gets the last time the user updated the local machine's CTA GTFS transit directory"""
     with open(UPDATED_TXT_PATH,"r") as txtfile:
         return txtfile.read()
-    # with open(os.path.abspath("./cta/cta/cta_google_transit/updated.txt"),"r") as txtfile:
-    #     return txtfile.read()
 
-def update_all():
+def update_all_util():
+    """
+    Excludes updating the 'bus_route_directions.csv'. This task is delegated to the 'update_all' function in cta.py
+
+    'update_all' is essentially a wrapper for this function and the 'update_bus_route_directions' in cta.py
+    """
     update_bus_routes()
     update_train_stations()
     update_route_transfers()
     update_static_feed(True)
 
-def get_parent_stop():
-    pass
+
+
+# other
 
 def get_stop_name(stpid):
     df = get_stops()
@@ -367,3 +400,15 @@ def get_stop_coords(stpid):
     df = get_stops()
     station_row = df[df["stop_id"]==stpid].iloc[0]
     return (str(station_row.lat.item()),str(station_row.lon.item()))
+
+def sort_by_distance(curr_lat,curr_lon,stop_df):
+    stop_df_records = stop_df.to_dict("records")
+    distances = []
+    for coords in stop_df_records:
+        distances.append(get_distance(curr_lat,curr_lon,coords["lat"],coords["lon"]))
+    stop_df["dist"] = distances
+    return stop_df.sort_values(by="dist",ascending=True)
+
+
+
+

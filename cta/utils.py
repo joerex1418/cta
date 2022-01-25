@@ -248,6 +248,27 @@ def get_coordinates(query) -> tuple:
     lon = resp[0]["lon"]
     return (lat,lon)
 
+def time_since_midnight(time_str:str):
+    """
+    Pass in time string (format: HH:MM:SS) and returns the time since midnight (in seconds)
+    """
+
+    ts = time_str
+    h = int(ts[:2])
+    into_next_day = False
+    if h > 23:
+        into_next_day = True
+        h = h - 24
+    m = int(ts[3:5])
+    s = int(ts[-2:])
+    if into_next_day is False:
+        full_day_diff = dt.timedelta(seconds=86400)
+        tm_obj = dt.time(hour=h,minute=m,second=s)
+        dt_obj = dt.datetime(1,1,1,hour=h,minute=m,second=s)
+    else:
+        full_day_diff = dt.timedelta(seconds=86400)
+        tm_obj = dt.time(hour=h,minute=m,second=s)
+        dt_obj = dt.datetime(1,1,1,hour=h,minute=m,second=s)
 
 
 
