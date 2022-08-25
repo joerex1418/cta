@@ -1,4 +1,4 @@
-# PyCTA
+# cta
 A Python wrapper for interacting with the CTA Transit Feeds:  
 
 - **BusTrackerAPI**  
