@@ -1,6 +1,0 @@
-requests
-Pandas
-bs4
-lxml
-html5lib
-polars

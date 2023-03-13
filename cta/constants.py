@@ -1,13 +1,9 @@
 CTA_BUS_BASE = "http://www.ctabustracker.com/bustime/api/v2"
-CTA_BUS_API_KEY = ""
-ALT_BUS_API_KEY = ""
 
 CTA_TRAIN_BASE = "http://lapi.transitchicago.com/api/1.0"
-CTA_TRAIN_API_KEY = ""
-ALT_TRAIN_API_KEY = ""
 
-CTA_ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" # I don't think an API key is needed for this...which is nice :)
-
+# I don't think an API key is needed for this endpoint...which is nice :)
+CTA_ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" 
 
 DATA_BASE = "https://data.cityofchicago.org/resource/6iiy-9s97.json?"
 
