@@ -1,15 +1,23 @@
-CTA_BUS_BASE = "http://www.ctabustracker.com/bustime/api/v2"
+BUS_BASE = "https://www.ctabustracker.com/bustime/api/v2"
 
-CTA_TRAIN_BASE = "http://lapi.transitchicago.com/api/1.0"
+TRAIN_BASE = "http://lapi.transitchicago.com/api/1.0"
 
 # I don't think an API key is needed for this endpoint...which is nice :)
-CTA_ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" 
+ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" 
 
-DATA_BASE = "https://data.cityofchicago.org/resource/6iiy-9s97.json?"
+# DATA_BASE = "https://data.cityofchicago.org/resource/6iiy-9s97.json?"
 
 PRD_TYPES = {
     "A":"arrival",
-    "D":"departure"}
+    "D":"departure"
+}
+
+ROUTE_COLS = {
+    "rt": "route_id",
+    "rtnm": "route_name",
+    "rtclr": "route_color",
+    "rtdd": "route_dd"
+}
 
 VEHICLE_COLS = {
     "vid":"vehicle_id",
@@ -23,29 +31,35 @@ VEHICLE_COLS = {
     "pdist":"distance",
     "dly":"delayed",
     "tatripid":"trip_id",
-    "tablockid":"block_id"}
+    "origtatripno": "original_trip_num",
+    "tablockid":"block_id",
+    "zone": "zone"
+}
 
 STOP_COLS = {
     "stpid":"stop_id",
     "stpnm":"stop",
     "lat":"lat",
-    "lon":"lon"}
+    "lon":"lon"
+}
 
 PREDICTION_COLS = {
     "tmstmp":"timestamp",
     "typ":"type",
-    "stpnm":"stop",
+    "stpnm":"stop_name",
     "stpid":"stop_id",
     "vid":"vehicle_id",
-    "dstp":"distanced_rem",
+    "dstp":"distance_remaining",
     "rt":"route",
     "rtdir":"direction",
     "des":"destination",
     "prdtm":"predicted_time",
-    "prdctdn":"time_rem",
+    "prdctdn":"time_remaining",
     "tablockid":"block_id",
     "tatripid":"trip_id",
-    "dly":"delayed"}
+    "origtatripno": "original_trip_num",
+    "dly":"delayed"
+}
 
 LINES = {
     "red":"Red",
@@ -72,7 +86,7 @@ LINES = {
     "pink":"Pink",
     "yellow":"Y",
     "y":"Y",
-    }
+}
 
 LINE_NAMES = {
     "Red":"Red Line",
@@ -83,18 +97,20 @@ LINE_NAMES = {
     "Pexp":"Purple Line Express",
     "P":"Purple Line",
     "Pink":"Pink Line",
-    "Y":"Yellow Line"}
+    "Y":"Yellow Line"
+}
 
 LINE_LABELS = {
     "Red":"Howard-95th/Dan Ryan",
     "Brn":"Kimball-Loop",
-    "Blue": "O’Hare-Forest Park",
+    "Blue": "O'Hare-Forest Park",
     "G":"Harlem/Lake-Ashland/63rd-Cottage Grove",
     "Org":"Midway-Loop",
     "Pexp":"Linden-Loop",
     "P":"Linden-Howard shuttle",
     "Pink":"54th/Cermak-Loop",
-    "Y":"Skokie-Howard [Skokie Swift] shuttle"}
+    "Y":"Skokie-Howard [Skokie Swift] shuttle"
+}
 
 LINE_COLORS = {
     "Red":"Red",
@@ -105,27 +121,8 @@ LINE_COLORS = {
     "Pexp":"Purple",
     "P":"Purple",
     "Pink":"Pink",
-    "Y":"Yellow"}
-
-FILTER_COL = {
-    "red":"red",
-    "brn":"brown",
-    "blue":"blue",
-    "g":"green",
-    "org":"orange",
-    "pexp":"purple_exp",
-    "p":"purple",
-    "pink":"pink",
-    "y":"yellow",
-    "Red":"red",
-    "Brn":"brown",
-    "Blue":"blue",
-    "G":"green",
-    "Org":"orange",
-    "Pexp":"purple_exp",
-    "P":"purple",
-    "Pink":"pink",
-    "Y":"yellow"}
+    "Y":"Yellow"
+}
 
 COLOR_LABEL_LIST = ("red","blue","green","brown","purple","purple_exp","yellow","pink","orange")
 
@@ -203,7 +200,7 @@ L_POSITIONS_COLS = (
 DIR_CODE_RLOOKUP = {
     "1":{
         "red":"Howard-bound",
-        "blue":"O’Hare-bound",
+        "blue":"O'Hare-bound",
         "brown":"Kimball-bound",
         "green":"Harlem/Lake-bound",
         "orange":"Loop-bound",
@@ -211,7 +208,7 @@ DIR_CODE_RLOOKUP = {
         "pink":"Loop-bound",
         "yellow":"Skokie-bound",
         "Red":"Howard-bound",
-        "Blue":"O’Hare-bound",
+        "Blue":"O'Hare-bound",
         "Brn":"Kimball-bound",
         "G":"Harlem/Lake-bound",
         "Org":"Loop-bound",

@@ -1,4 +1,12 @@
 .env/
 .git
-.__pycache__
-cta/.DS_Store
+__pycache__
+.DS_Store
+
+key.json
+
+sandbox.*
+script.py
+
+
+
