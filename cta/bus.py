@@ -74,7 +74,7 @@ def _parse_predictions_response(r:httpx.Response):
         data.append(prediction_data)
     
     return data
-            
+
 # ---------------------------------- #
 # Bus API functions
 # ---------------------------------- #
@@ -214,6 +214,8 @@ def get_patterns(route_id:str=None,pattern_id:typing.Union[str,typing.List[str]]
     if route_id:
         params["rt"] = route_id
     elif pattern_id:
+        if isinstance(pattern_id,list):
+            pattern_id = ",".join(pattern_id)
         params["pid"] = pattern_id
     
     if kwargs.get("return_url") == True:
@@ -223,6 +225,20 @@ def get_patterns(route_id:str=None,pattern_id:typing.Union[str,typing.List[str]]
     
     return r.json()
 
+def get_predictions(*,stop_id:str=None,route_id:str=None,vehicle_id:str=None):
+    params = DEFAULT_PARAMS.copy()
+    if vehicle_id:
+        params["vid"] = vehicle_id
+    elif stop_id:
+        params["stpid"] = stop_id
+        if route_id:
+            params["rt"] = route_id
+        
+    r = httpx.get(urls.PREDICTIONS, params=params)
+    
+    data = _parse_predictions_response(r)
+    
+    return data
 
 # ---------------------------------- #
 # Classes (for easy interfacing)
@@ -238,7 +254,9 @@ class Route:
             c.execute("""
                       SELECT pattern_id, length, direction 
                       FROM bus_route_patterns WHERE route_id=?;
-                      """,[route_id])
+                      """,
+                      [route_id]
+                      )
             
             for row in c.fetchall():
                 patterns.append({
@@ -252,7 +270,9 @@ class Route:
             c.execute("""
                       SELECT * 
                       FROM bus_route_patterns WHERE route_id=?;
-                      """,[route_id])
+                      """,
+                      [route_id]
+                      )
             
             row = c.fetchone()
             for idx, direction in enumerate(("Northbound", "Southbound", "Westbound", "Eastbound")):
@@ -298,7 +318,7 @@ class Route:
         data = _parse_vehicles_response(r)
         return data
     
-    def get_predictions(self,stop_id:str=None,vehicle_id:str=None):
+    def get_predictions(self,*,stop_id:str=None,vehicle_id:str=None):
         params = DEFAULT_PARAMS.copy()
         if vehicle_id is not None:
             params["vid"] = vehicle_id
@@ -312,9 +332,30 @@ class Route:
         
     
     id=route_id
-    
+
 
 class Stop:
-    __slots__ = ("_data",)
+    __slots__ = ("__data",)
     def __init__(self,stop_id:str):
-        pass
+        stop_id = str(stop_id).strip()
+        self.__data = {
+            "stop_id": stop_id
+        }
+        
+    @property
+    def stop_id(self):
+        return self.__data["stop_id"]
+    
+    def get_predictions(self,route_id:str=None):
+        params = DEFAULT_PARAMS.copy()
+        params["stpid"] = self.stop_id
+        if route_id:
+            params["rt"] = route_id
+        
+        r = httpx.get(urls.PREDICTIONS, params=params)
+    
+        data = _parse_predictions_response(r)
+        
+        return data
+
+

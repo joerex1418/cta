@@ -7,16 +7,25 @@ import zipfile
 import pprint
 
 import httpx
+from haversine.haversine import Unit
+from haversine.haversine import haversine
 
+from .ctatypes import DateLike
+
+class Point(typing.NamedTuple):
+    x: float
+    y: float
+
+
+OSM_BASE = "https://nominatim.openstreetmap.org/search?"
+OSM_REVERSE_BASE = "https://nominatim.openstreetmap.org/reverse.php?"
 
 pp = pprint.PrettyPrinter(sort_dicts=False, indent=2)
-
 
 def get_db_connection(db_name:str):
     db_name = db_name.replace(".db","")
     path_to_db = pathlib.Path(__file__).parent.joinpath("data",f"{db_name}.db")
     return sqlite3.connect(path_to_db)
-
 
 TEXT = "TEXT"
 BOOL = "INTEGER"
@@ -96,8 +105,7 @@ def create_table(db_name,*,name:str, data:typing.List[typing.Dict]):
         c.close()
         conn.commit()
 
-
-def download_static_zipfile() -> zipfile.ZipFile:
+def fetch_static_zipfile() -> zipfile.ZipFile:
     url = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"
     
     r = httpx.get(url,timeout=10)
@@ -106,9 +114,8 @@ def download_static_zipfile() -> zipfile.ZipFile:
     
     return z
 
-
 def static_stop_data_db():
-    with download_static_zipfile() as z:
+    with fetch_static_zipfile() as z:
         with z.open("stops.txt") as fp:
             io_string = io.TextIOWrapper(fp,encoding="utf-8")
             reader = csv.reader(io_string)
@@ -125,4 +132,44 @@ def static_stop_data_db():
                 data.append(stop_data)
             
             create_table("cta",name="stop_data",data=data)
+
+def geosearch(q:str):
+    params = {"q": q, "format": "jsonv2", "addressdetails": "1"}
+    
+    r = httpx.get(OSM_BASE,params=params)
+    
+    data = []
+    for item in r.json():
+        lat = float(item["lat"])
+        lon = float(item["lon"])
+        data.append({
+            "display_name": item["display_name"],
+            "category": item["category"],
+            "type": item["type"],
+            "lat": lat,
+            "lon": lon,
+            "address": item.get("address",{}),
+            "point": Point(lat, lon)
+        })
+    
+    return data
+
+@typing.overload
+def distance(x1,y1,x2,y2):...
+@typing.overload
+def distance(point1,point2):...
+def distance(*args):
+    assert(len(args) >= 2)
+    
+    if len(args) == 2:
+        point1 = args[0]
+        point2 = args[1]
+    elif len(args) == 4:
+        point1 = Point(float(args[0]), float(args[1]))
+        point2 = Point(float(args[2]), float(args[3]))
+    else:
+        raise ValueError("Function accepts 2 'Point' objects or 'x1', 'y1', 'x2', 'y2' values")        
+
+    return haversine(point1,point2,unit=Unit.MILES)
+
 

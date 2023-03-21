@@ -7,6 +7,29 @@ ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0"
 
 # DATA_BASE = "https://data.cityofchicago.org/resource/6iiy-9s97.json?"
 
+STATIC_FILES = (
+    "trips",
+    "stops",
+    "stop_times",
+    "shapes",
+    "routes",
+    "frequencies",
+    "calendar_dates",
+    "transfers",
+    "agency"
+)
+
+XFER_COLS = (
+    "route_id", 
+    "location_type", 
+    "stop_name", 
+    "stop_id", 
+    "lat", 
+    "lon", 
+    "bearing", 
+    "transfers"
+)
+
 PRD_TYPES = {
     "A":"arrival",
     "D":"departure"

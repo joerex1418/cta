@@ -4,9 +4,12 @@ __pycache__
 .DS_Store
 
 key.json
+data/bus.db
+data/cta.db
 
 sandbox.*
 script.py
 
 
 
+cta/data/cta.db
