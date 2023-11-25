@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Load generated CSS files here -->
+    {% assets "style" %} 
+    <link rel="stylesheet" type="text/css" href="{{ ASSET_URL }}">
+    {% endassets %}
+    
+    <title>CTA Tracker</title>
+</head>
+<body>
+    {% block content %}{% endblock content %}
+
+
+    <div style="display: none;">
+        <div id="lat"></div>
+        <div id="lon"></div>
+    </div>
+    <!-- Load static JavaScript files here -->
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>

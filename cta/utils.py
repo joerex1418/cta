@@ -5,6 +5,7 @@ import sqlite3
 import pathlib
 import zipfile
 import pprint
+import datetime as dt
 
 import httpx
 from haversine.haversine import Unit
@@ -21,6 +22,20 @@ OSM_BASE = "https://nominatim.openstreetmap.org/search?"
 OSM_REVERSE_BASE = "https://nominatim.openstreetmap.org/reverse.php?"
 
 pp = pprint.PrettyPrinter(sort_dicts=False, indent=2)
+
+def _dateobj(date:DateLike):
+    date = date or dt.date.today()
+    if isinstance(date,(dt.date,dt.datetime)):
+        if isinstance(date,dt.datetime):
+            date = date.date()
+    elif isinstance(date,str):
+        if "-" in date:
+            date = date.replace('-','')
+        date = dt.datetime.strptime(date,r"%Y%m%d").date()
+    return date
+
+def _iso_to_datetime(dtstring:str):
+    return dt.datetime.strptime(dtstring,r"%Y-%m-%dT%H:%M:%S")
 
 def get_db_connection(db_name:str):
     db_name = db_name.replace(".db","")
@@ -133,7 +148,13 @@ def static_stop_data_db():
             
             create_table("cta",name="stop_data",data=data)
 
-def geosearch(q:str):
+typing.overload
+def geosearch():...
+typing.overload
+def geosearch():...
+def geosearch(*args,**kwargs):
+    if len(args) == 0:
+        q = args[0]
     params = {"q": q, "format": "jsonv2", "addressdetails": "1"}
     
     r = httpx.get(OSM_BASE,params=params)

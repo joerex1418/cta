@@ -298,7 +298,7 @@ class Route:
     def directions(self) -> typing.List:
         return self._data["directions"]
     
-    def get_stops(self,direction:str):
+    def get_stops(self,direction:typing.Literal["Northbound","Southbound","Eastbound","Westbound"]):
         params = DEFAULT_PARAMS.copy()
         params["rt"] = self.route_id
         params["dir"] = direction

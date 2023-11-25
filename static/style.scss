@@ -1,0 +1,113 @@
+body {
+    margin: 0;
+    font-family: Verdana, Geneva, Tahoma, sans-serif;
+}
+
+#page-banner {
+    padding: 10px;
+    background-color: #c1d9da;
+    #page-title {
+        color: #333745;
+        font-size: 30px;
+        font-weight: bold;
+    }
+}
+
+.btn-wrapper {
+    display: grid;
+    column-gap: 5px;
+    row-gap: 5px;
+    margin: 5px;
+}
+.btn {
+    cursor: pointer;
+    text-align: center;
+    display: grid;
+    background-color: #ffbcbc;
+    border-radius: 5px;
+    padding: 5px;
+    transition: background-color linear 100ms;
+    &:hover {
+        background-color: #ff8b8b;
+    }
+}
+
+#content {
+    @media screen and (max-width: 480px) {
+        margin-left: 0px;
+        margin-right: 0px;
+    }
+
+    #bus-tracker-btn {
+        grid-column: 1 / span 1; grid-row: 1 / span 1;
+    }
+    #train-tracker-btn {
+        grid-column: 2 / span 1; grid-row: 1 / span 1;
+    }
+    #nearby-stops-btn {
+        grid-column: 1 / span 2; grid-row: 2 / span 1;
+    }
+
+
+    #stoplist {
+        display: flex;
+        flex-direction: column;
+        row-gap: 17px;
+        
+        .stop-result {
+            cursor: pointer;
+            display: grid;
+            align-content: space-evenly;
+            background-color: #e5e4e4;
+            padding: 8px;
+            box-shadow: #000 0px 1px 5px 1px;
+            transition: background-color linear 100ms;
+            &:hover {
+                background-color: #a8a8a8;
+            }
+
+            .stop-detail {
+                font-size: 12px;
+                &.name {
+                    font-weight: bold;
+                    grid-column: 1 / span 1; grid-row: 1 / span 1;
+                }
+                &.stopid {
+                    font-weight: bold;
+                    grid-column: 2 / span 1; grid-row: 1 / span 1;
+                    justify-self: right;
+                }
+                &.direction {
+                    color: #5a5a5a;
+                    grid-column: 1 / span 1; grid-row: 2 / span 1;
+                }
+                &.routelist {
+                    display: flex;
+                    column-gap: 5px;
+                    height: 20px;
+                    grid-column: 1 / span 1; grid-row: 3 / span 1;
+                    .route-card {
+                        background-color: #181818;
+                        color: #fff;
+                        padding: 1px 4px;
+                        border-radius: 5px;
+                        text-align: center;
+                        &.busroute { width: 28px; }
+
+                        &.red { background-color: #9e0018; }
+                        &.blue { background-color: #0b22cc; }
+                        &.purple { background-color: #690080; }
+                        &.purple_exp { background-color: #690080; }
+                        &.orange { background-color: orange; }
+                        &.green { background-color: #008000; }
+                        &.brown { background-color: #742d00; }
+                        &.pink { background-color: #ca596c; }
+                        &.yellow { background-color: #ffff00; color: #000; }
+                    }
+                }
+            }
+
+        }
+    }
+
+}

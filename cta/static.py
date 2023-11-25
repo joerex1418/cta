@@ -7,7 +7,9 @@ import datetime as dt
 import httpx
 
 from . import utils
+from .utils import get_db_connection
 from .constants import XFER_COLS
+from .constants import DIRECTIONS
 from .constants import STATIC_FILES
 from .ctatypes import DateLike
 
@@ -20,8 +22,12 @@ class Direction(enum.Enum):
 class StopType(enum.Enum):
     BUS = "Bus"
     TRAIN = "Train"
+    
+def _dict_factory(cursor, row):
+    colnames = [c[0] for c in cursor.description]
+    return {k:v for k,v in zip(colnames, row)}
 
-def _dtobj(date:DateLike):
+def _dateobj(date:DateLike):
     date = date or dt.date.today()
     if isinstance(date,(dt.date,dt.datetime)):
         if isinstance(date,dt.datetime):
@@ -77,7 +83,7 @@ def save_stop_transfers():
 
     data.sort(key=lambda x: x["stop_id"])
 
-    with utils.get_db_connection("cta") as conn:
+    with get_db_connection("cta") as conn:
         c = conn.cursor()
         
         c.execute("DROP TABLE IF EXISTS STOP_XFERS;")
@@ -96,7 +102,7 @@ def save_stop_transfers():
     
 def stop_data():
     data = []
-    with utils.get_db_connection("cta") as conn:
+    with get_db_connection("cta") as conn:
         c = conn.cursor()
         
         c.execute("SELECT * FROM stop_data;")
@@ -140,7 +146,7 @@ def update_static_db(name:str):
             
             cols = [x for x in next(reader)]
             
-            with utils.get_db_connection("cta") as conn:
+            with get_db_connection("cta") as conn:
                 c = conn.cursor()
                 
                 c.execute(f"DROP TABLE IF EXISTS {name};")
@@ -231,12 +237,12 @@ def update_static_db(name:str):
                     )
 
 def current_service_ids(date:DateLike=None):
-    date = _dtobj(date)
+    date = _dateobj(date)
     
     day_of_week = date.strftime(r"%A").lower()
     
     data = []
-    with utils.get_db_connection("cta") as conn:
+    with get_db_connection("cta") as conn:
         c = conn.cursor()
         c.execute(f"""
                   SELECT service_id, start_date, end_date 
@@ -256,7 +262,7 @@ def current_trip_ids(date:DateLike=None):
     service_ids = [str(_id) for _id in current_service_ids(date)]
     
     data = []
-    with utils.get_db_connection("cta") as conn:
+    with get_db_connection("cta") as conn:
         c = conn.cursor()
         c.execute("SELECT * FROM trips;")
         cols = [c[0] for c in c.description]
@@ -273,20 +279,24 @@ class CTAdb:
     def __init__(self):
         pass
     
-    def stops(self,*,
-              stop_id:int=None,
-              stop_name:str=None,
-              stop_desc:str=None,
-              location_type:int=None,
-              parent_station:int=None,
-              wheelchair_boarding=None,
-              stop_type:StopType=None,
-              **kwargs
-              ):
+    def stops(
+        self,*,
+        stop_id:int=None,
+        stop_name:str=None,
+        stop_desc:str=None,
+        location_type:int=None,
+        parent_station:int=None,
+        wheelchair_boarding=None,
+        stop_type:StopType=None,
+        **kwargs
+        ) -> typing.List[typing.Dict]:
+
         wheelchair_boarding = kwargs.get("wheelchair_accessible",wheelchair_boarding)
         
         data = []
-        with utils.get_db_connection("cta") as conn:
+        with get_db_connection("cta") as conn:
+            if kwargs.get("dict_factory") == True:
+                conn.row_factory = _dict_factory
             c = conn.cursor()
             
             querylist = []
@@ -327,22 +337,23 @@ class CTAdb:
         
         return data
 
-    def trips(self,*,
-              route_id=None,
-              service_id=None,
-              trip_id=None,
-              direction_id=None,
-              block_id=None,
-              shape_id=None,
-              direction=None,
-              wheelchair_accessible=None,
-              schd_trip_id,
-              **kwargs
-              ):
+    def trips(
+        self,*,
+        route_id=None,
+        service_id=None,
+        trip_id=None,
+        direction_id=None,
+        block_id=None,
+        shape_id=None,
+        direction=None,
+        wheelchair_accessible=None,
+        schd_trip_id,
+        **kwargs
+        ):
         wheelchair_accessible = kwargs.get("wheelchair_boarding", wheelchair_accessible)
         
         data = []
-        with utils.get_db_connection("cta") as conn:
+        with get_db_connection("cta") as conn:
             c = conn.cursor()
             
             querylist = []
@@ -399,6 +410,256 @@ class CTAdb:
         
         return data
 
+    def L_stops(
+        self,*,
+        stop_id:int=None,
+        stop_name:str=None,
+        direction_id:str=None,
+        parent_station:int=None,
+        ada:bool=None,
+        red:bool=None,
+        blue:bool=None,
+        green:bool=None,
+        brown:bool=None,
+        purple:bool=None,
+        purple_exp:bool=None,
+        yellow:bool=None,
+        pink:bool=None,
+        orange:bool=None,
+        **kwargs
+        ) -> typing.List[typing.Dict]:
+        """
+        Query L-stops table
+        
+        stop_id: int
+        
+        stop_name: str
+        
+        direction_id: str
+            Normal direction of train traffic at platform. Accepts various denotations
+            of directions. For example, acceptable values for train stops servicing 
+            'Northbound' trains are "N", "North", "Northbound", "NB".
+        
+        parent_station: int
+            Parent station ID (or map ID) of a stop. Parent stations typically have two
+            stops, with one platform servicing trains in a single direction, and another
+            servicing trains in the opposite direction.        
+        
+        ada: bool
+            Stop/station is ADA compliant
+        
+        red: bool
+            Stop/station services the Red line
+        
+        blue: bool
+            Stop/station services the Blue line
+        
+        green: bool
+            Stop/station services the Green line
+        
+        brown: bool
+            Stop/station services the Brown line
+        
+        purple: bool
+            Stop/station services the Purple line
+        
+        purple_exp: bool
+            Stop/station services Purple line express trains 
+        
+        yellow: bool
+            Stop/station services the Yellow line
+
+        pink: bool
+            Stop/station services the Pink line
+
+        orange: bool
+            Stop/station services the Orange line
+        """
+        
+        ada = kwargs.get("wheelchair_boarding",kwargs.get("wheelchair_accessible",ada))
+        
+        data = []
+        with get_db_connection("train") as conn:
+            if kwargs.get("dict_factory") == True:
+                conn.row_factory = _dict_factory
+            c = conn.cursor()
+            
+            querylist = []
+            values = []
+            if stop_id:
+                querylist.append("stop_id=?")
+                values.append(int(stop_id))
+            if stop_name:
+                querylist.append("stop_name LIKE ?")
+                values.append(str(stop_name))
+            if direction_id:
+                _dir = self.__validate_direction_id(direction_id)
+                querylist.append("direction_id=?")
+                values.append(_dir)
+            if parent_station:
+                querylist.append("parent_station=?")
+                values.append(int(parent_station))
+            if ada:
+                querylist.append("ada=?")
+                values.append(ada)
+            if red:
+                querylist.append("red=?")
+                values.append(red)
+            if blue:
+                querylist.append("blue=?")
+                values.append(blue)
+            if green:
+                querylist.append("green=?")
+                values.append(green)
+            if green:
+                querylist.append("green=?")
+                values.append(green)
+            if brown:
+                querylist.append("brown=?")
+                values.append(brown)
+            if purple:
+                querylist.append("purple=?")
+                values.append(purple)
+            if purple_exp:
+                querylist.append("purple_exp=?")
+                values.append(purple_exp)
+            if yellow:
+                querylist.append("yellow=?")
+                values.append(yellow)
+            if pink:
+                querylist.append("pink=?")
+                values.append(pink)
+            if orange:
+                querylist.append("orange=?")
+                values.append(orange)
+                
+            # Generate Query (with WHERE statements if necessary)
+            if len(querylist) > 0:
+                queries = " AND ".join(querylist)
+                c.execute(f"SELECT * FROM stops WHERE {queries};",values)
+                cols = [c[0] for c in c.description]
+                for row in c.fetchall():
+                    data.append({col:row[idx] for idx, col in enumerate(cols)})
+            else:
+                c.execute("SELECT * FROM stops;")
+                cols = [c[0] for c in c.description]
+                for row in c.fetchall():
+                    data.append({col:row[idx] for idx, col in enumerate(cols)})
+        
+        return data
+
+    def update_L_stops(self):
+        data = self.__get_L_stops()
+        data.sort(key=lambda x: x["stop_id"])
+
+        with get_db_connection("train") as conn:
+            c = conn.cursor()
+            
+            c.executescript(
+                """
+                DROP TABLE IF EXISTS stops;
+                CREATE TABLE stops (
+                    stop_id INTEGER,
+                    direction_id TEXT,
+                    stop_name TEXT,
+                    station_name TEXT,
+                    station_name_descriptive TEXT,
+                    parent_station INTEGER,
+                    ada INTEGER,
+                    red INTEGER,
+                    blue INTEGER,
+                    green INTEGER,
+                    brown INTEGER,
+                    purple INTEGER,
+                    purple_exp INTEGER,
+                    yellow INTEGER,
+                    pink INTEGER,
+                    orange INTEGER,
+                    latitude REAL,
+                    longitude REAL
+                );
+                """
+            )
+            
+            c.executemany(
+                """
+                INSERT INTO stops VALUES (
+                    :stop_id,
+                    :direction_id,
+                    :stop_name,
+                    :station_name,
+                    :station_name_descriptive,
+                    :parent_station,
+                    :ada,
+                    :red,
+                    :blue,
+                    :green,
+                    :brown,
+                    :purple,
+                    :purple_exp,
+                    :yellow,
+                    :pink,
+                    :orange,
+                    :latitude,
+                    :longitude
+                )
+                """,
+                data)
+            
+            c.close()
+    
+    train_stops = L_stops
+    update_train_stops = update_L_stops
+    
+    def __get_L_stops(self) -> typing.List[typing.Dict]:
+        """
+        Data for L-stops/stations.
+        
+        Not directly from the API, but it comes from Chicago's Data Portal:
+        
+        https://data.cityofchicago.org/Transportation/CTA-System-Information-List-of-L-Stops/8pix-ypme
+        """
+        
+        url = "https://data.cityofchicago.org/resource/8pix-ypme.json"
+        r = httpx.get(url)
+        
+        data = []
+        for d in r.json():
+            loc = d.get("location",{})
+            data.append({
+                "stop_id": int(d.get("stop_id")),
+                "direction_id": d.get("direction_id"),
+                "stop_name": d.get("stop_name","").strip(),
+                "station_name": d.get("station_name","").strip(),
+                "station_name_descriptive": d.get("station_name_descriptive","").strip(),
+                "parent_station": int(d.get("map_id",-1)),
+                "ada": d.get("ada"),
+                "red": d.get("red"),
+                "blue": d.get("blue"),
+                "green": d.get("g"),
+                "brown": d.get("brn"),
+                "purple": d.get("p"),
+                "purple_exp": d.get("pexp"),
+                "yellow": d.get("y"),
+                "pink": d.get("pnk"),
+                "orange": d.get("o"),
+                "latitude": float(loc.get("latitude")),
+                "longitude": float(loc.get("longitude"))
+            })
+        
+        return data
+    
+    def __validate_direction_id(_dir:str,/):
+        _dir = _dir.lower()
+        if _dir in ("n","north","northbound","nb"):
+            return "N"
+        elif _dir in ("s","south","southbound","sb"):
+            return "S"
+        elif _dir in ("e","east","eastbound","eb"):
+            return "E"
+        elif _dir in ("w","west","westbound","wb"):
+            return "W"
+    
 ctadb = CTAdb()
 
 
@@ -406,15 +667,15 @@ ctadb = CTAdb()
 # Closest Stops
 # ----------------------------- #
 @typing.overload
-def closest_stops(x1:float,x2:float,*,number:int,stop_type:StopType):...
+def closest_stops(x1:float, x2:float,*, number:int, stop_type:StopType, platform_stops_only:bool=None, parent_stops_only:bool=None, group_platform_stops:bool=None) -> typing.List[typing.Dict]:...
 @typing.overload
-def closest_stops(point:tuple,*,number:int,stop_type:StopType):...
+def closest_stops(point:tuple,*, number:int, stop_type:StopType, platform_stops_only:bool=None, parent_stops_only:bool=None, group_platform_stops:bool=None) -> typing.List[typing.Dict]:...
 @typing.overload
-def closest_stops(*,q:str,number:int,stop_type:StopType):...
+def closest_stops(*,q:str, number:int, stop_type:StopType, platform_stops_only:bool=None, parent_stops_only:bool=None, group_platform_stops:bool=None) -> typing.List[typing.Dict]:...
 @typing.overload
-def closest_stops(*,q:str,number:int,stop_type:StopType):...
+def closest_stops(*,q:str, number:int, stop_type:StopType, platform_stops_only:bool=None, parent_stops_only:bool=None, group_platform_stops:bool=None) -> typing.List[typing.Dict]:...
 
-def closest_stops(*args,q:str=None,number:int=5,stop_type:StopType=None):
+def closest_stops(*args,q:str=None,number:int=5,stop_type:StopType=None, child_stops_only:bool=None, parent_stops_only:bool=None, group_child_stops:bool=None) -> typing.List[typing.Dict]:
     if len(args) == 1:
         point = args[0]
     elif len(args) == 2:
@@ -424,8 +685,21 @@ def closest_stops(*args,q:str=None,number:int=5,stop_type:StopType=None):
         point = locs[0]["point"]
     
     data = ctadb.stops(stop_type=stop_type)
-    
     data.sort(key=lambda x: utils.distance(utils.Point(x["stop_lat"],x["stop_lon"]), point))
+    
+    if stop_type == "Train":
+        if group_child_stops == True:
+            parent_stop_data = [d for d in data if d["stop_id"] >= 40000]
+            parent_stations = [d["stop_id"] for d in parent_stop_data[:number]]
+            data = [d for d in data if d["parent_station"] in parent_stations]
+            
+            return data
+        
+        elif parent_stops_only == True:
+            data = [d for d in data if d["stop_id"] >= 40000]
+        elif child_stops_only == True:
+            data = [d for d in data if 30000 <= d["stop_id"] < 40000]
+    
     
     return data[:number]
     

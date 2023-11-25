@@ -1,0 +1,28 @@
+{% for stop in all_stops %}
+    {% set stop_type = stop["stop_type"] %}
+    {% set direction = stop["direction"] %}
+    {% if stop_type == "train" %}
+        {% set stop_name = stop["stop_desc"] %}
+        {% set stop_type_display = '"L" Station' %}
+    {% else %} 
+        {% set stop_name = stop["stop_name"] %}
+        {% set stop_type_display = 'Bus Stop' %}
+    {% endif %}
+
+    <div class="stop-result" data-id="{{stop['stop_id']}}">
+        <div class="stop-detail name">{{ stop_name }}</div>
+        <div class="stop-detail stopid">#{{ stop["stop_id"] }}</div>
+        <div class="stop-detail direction">{{ direction }}</div>
+        <div class="stop-detail routelist">
+            {% if stop_type == "train" %}
+                {% for key,val in stop.get("route_list",[]) %}
+                    <div class="route-card {{ key }}">{{ val }}</div>
+                {% endfor %}
+            {% else %}
+                {% for route in routes_at_stop[stop["stop_id"]] %}
+                    <div class="route-card busroute">{{ route }}</div>
+                {% endfor %}
+            {% endif %}
+        </div>
+    </div>
+{% endfor %}

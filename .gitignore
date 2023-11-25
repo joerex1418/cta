@@ -2,6 +2,7 @@
 .git
 __pycache__
 .DS_Store
+.webassets-cache
 
 key.json
 data/bus.db
@@ -12,4 +13,7 @@ script.py
 
 
 
+cta/data/cta.db
+cta/data/train.db
+cta/data/cta.db
 cta/data/cta.db

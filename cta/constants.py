@@ -3,9 +3,11 @@ BUS_BASE = "https://www.ctabustracker.com/bustime/api/v2"
 TRAIN_BASE = "http://lapi.transitchicago.com/api/1.0"
 
 # I don't think an API key is needed for this endpoint...which is nice :)
-ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0" 
+ALERTS_BASE = "http://lapi.transitchicago.com/api/1.0"
 
 # DATA_BASE = "https://data.cityofchicago.org/resource/6iiy-9s97.json?"
+
+DIRECTIONS = {"N": "Northbound", "S": "Southbound", "E": "Eastbound", "W": "Westbound"}
 
 STATIC_FILES = (
     "trips",
